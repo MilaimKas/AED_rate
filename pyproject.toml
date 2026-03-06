@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aed_rate"
+version = "0.1.0"
+description = "Associative Electron Detachment rate calculations"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+]
+
+[project.optional-dependencies]
+pyscf = ["pyscf>=2.3"]
+plot = ["matplotlib>=3.5"]
+
+[tool.setuptools.packages.find]
+include = ["aed_rate*"]
