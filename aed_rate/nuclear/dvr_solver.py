@@ -28,10 +28,13 @@ accurate dF/dR, use MorseAnalyticSolver instead.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 from typing import List, Optional
 
 from ..electronic.potential import PotentialEnergyCurve
+from ..utils.constants import AEDValidationWarning
 from ._base_solver import BoundState, ScatteringState, WavefunctionSolver
 
 
@@ -140,7 +143,7 @@ class DVRWavefunctionSolver(WavefunctionSolver):
             )
 
         idx = bound_indices[v]
-        wf, norm = self._normalize_wavefunction(eigenvectors[idx])
+        wf, norm = self._box_normalize(eigenvectors[idx])
 
         return BoundState(
             v=v, J=J,
@@ -157,13 +160,22 @@ class DVRWavefunctionSolver(WavefunctionSolver):
         Scattering wavefunction at collision energy E_collision.
 
         Selects the box eigenstate whose energy is closest to
-        E_dissoc + E_collision.  Box normalization: ∫|χ|² dR = 1.
+        E_dissoc + E_collision, then box-normalizes it (∫|F|² dR = 1).
 
-        Note: the box enforces F(R_max) = 0, which introduces a phase
-        error relative to the physical scattering state.  Use
-        MorseAnalyticSolver for coupling integrals that need the correct
-        phase and dF/dR amplitude.
+        Note: the box enforces F(R_max) = 0, which selects an arbitrary
+        standing-wave phase rather than the physical scattering phase.  This
+        biases coupling integrals.  Use the analytical Morse solver
+        (solver_method='morse') for coupling integrals / cross sections, which
+        gives the correct phase, an exact derivative, and a unit-amplitude
+        normalization option.
         """
+        warnings.warn(
+            "DVR scattering states enforce F(R_max)=0, giving an arbitrary "
+            "standing-wave phase that biases coupling integrals. Use "
+            "solver_method='morse' for coupling integrals / cross sections.",
+            AEDValidationWarning,
+            stacklevel=2,
+        )
         eigenvalues, eigenvectors = self._solve_eigensystem(J)
 
         E_total = self.potential.dissociation_energy + E_collision
@@ -178,9 +190,10 @@ class DVRWavefunctionSolver(WavefunctionSolver):
             np.argmin(np.abs(eigenvalues[continuum_indices] - E_total))
         ]
 
-        wf, _ = self._normalize_wavefunction(eigenvectors[closest])
+        wf, _ = self._box_normalize(eigenvectors[closest])
 
         k = np.sqrt(2.0 * self.mu * E_collision)
+
         phase_shift = self._extract_phase_shift(
             self.r_grid[-100:], wf[-100:], k, J
         )
@@ -200,7 +213,7 @@ class DVRWavefunctionSolver(WavefunctionSolver):
 
         states = []
         for v, idx in enumerate(bound_indices):
-            wf, norm = self._normalize_wavefunction(eigenvectors[idx])
+            wf, norm = self._box_normalize(eigenvectors[idx])
             states.append(BoundState(
                 v=v, J=J,
                 energy=float(eigenvalues[idx]),

@@ -110,11 +110,11 @@ class WavefunctionSolver(ABC):
     # Shared helpers
     # ------------------------------------------------------------------
 
-    def _normalize_wavefunction(
+    def _box_normalize(
         self, f: np.ndarray
     ) -> tuple[np.ndarray, float]:
         """
-        Normalize so that ∫|F(R)|² dR = 1.
+        Box-normalize so that ∫|F(R)|² dR = 1 over [r_min, r_max].
 
         Returns (f_normalized, norm).
         """
@@ -124,6 +124,42 @@ class WavefunctionSolver(ABC):
             norm_sq = np.sum(f ** 2) * self.dr
         norm = float(np.sqrt(max(norm_sq, 1e-30)))
         return f / norm, norm
+
+    def _energy_normalize_scattering(
+        self, f: np.ndarray, k: float,
+    ) -> tuple[np.ndarray, float]:
+        """
+        Energy-normalize a scattering wavefunction so ⟨E|E'⟩ = δ(E-E').
+
+        The asymptotic form of an energy-normalized radial wavefunction is:
+
+            F_E(R) → √(2μ/(πk)) × sin(kR + δ)     as R → ∞
+
+        We first box-normalize (∫|F|²dR=1 → amplitude √(2/L) in the
+        asymptotic region), then rescale by the ratio:
+
+            factor = √(2μ/(πk)) / √(2/L) = √(μL/(πk))
+
+        where L = r_max - r_min is the box length and k = √(2μ E_coll)
+        is the asymptotic nuclear wavenumber.
+
+        Parameters
+        ----------
+        f : np.ndarray
+            Un-normalized scattering wavefunction on r_grid.
+        k : float
+            Asymptotic nuclear wavenumber √(2μ E_coll) in a.u.
+
+        Returns
+        -------
+        (f_energy_norm, box_norm) : tuple
+            Energy-normalized wavefunction and the box normalization constant
+            (useful for rescaling the derivative by the same factor).
+        """
+        f_box, box_norm = self._box_normalize(f)
+        L = self.r_max - self.r_min
+        factor = float(np.sqrt(self.mu * L / (np.pi * k)))
+        return f_box * factor, box_norm
 
     def wavefunction_derivative(self, state) -> np.ndarray:
         """

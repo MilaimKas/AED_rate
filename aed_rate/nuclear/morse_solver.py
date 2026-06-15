@@ -359,7 +359,7 @@ class MorseAnalyticSolver(WavefunctionSolver):
         wf = _bound_wavefunction_kernel(
             self.r_grid, v, p["lam_eff"], p["R_e_eff"], self.beta
         )
-        wf, norm = self._normalize_wavefunction(wf)
+        wf, norm = self._box_normalize(wf)
 
         state = BoundState(
             v=v, J=J, energy=energy,
@@ -380,7 +380,7 @@ class MorseAnalyticSolver(WavefunctionSolver):
     # ------------------------------------------------------------------
 
     def solve_scattering_state(
-        self, E_collision: float, J: int = 0
+        self, E_collision: float, J: int = 0, normalization: str = "box"
     ) -> ScatteringState:
         """
         Numerov scattering wavefunction on the Pekeris-corrected Morse potential.
@@ -393,12 +393,34 @@ class MorseAnalyticSolver(WavefunctionSolver):
         the effective collision energy E_coll_eff = E_coll - B_J × c₀ is
         checked to be positive (otherwise raises ValueError).
 
+        Parameters
+        ----------
+        E_collision : float
+            Collision energy above the anion dissociation limit (Hartree).
+        J : int
+            Collisional angular momentum.
+        normalization : {"box", "unit_amplitude"}
+            How to scale the wavefunction (and its derivative):
+              - "box": ∫|F|² dR = 1 over [r_min, r_max]. L-dependent; used by
+                the legacy box-normalized rate.
+              - "unit_amplitude": asymptotically F → sin(kR − Jπ/2 + δ) with
+                unit amplitude (the spherical-Bessel / amplitude-1 convention
+                of Čížek 2001, Eq. 2.7). L-independent; required for absolute
+                AED cross sections.
+
         The returned ScatteringState carries state._analytical_derivative,
         which wavefunction_derivative() returns directly (TISE-based, no
-        sin(kΔ)/(kΔ) amplitude damping).
+        sin(kΔ)/(kΔ) amplitude damping).  It also carries
+        state._asymptotic_amplitude (the asymptotic amplitude of the returned,
+        normalized F — ≈ 1.0 for "unit_amplitude") and state._normalization.
         """
+        if normalization not in ("box", "unit_amplitude"):
+            raise ValueError(
+                f"normalization must be 'box' or 'unit_amplitude', "
+                f"got {normalization!r}"
+            )
         E_key = round(E_collision, 14)
-        cache_key = (E_key, J)
+        cache_key = (E_key, J, normalization)
         if cache_key in self._scattering_cache:
             return self._scattering_cache[cache_key]
 
@@ -431,9 +453,24 @@ class MorseAnalyticSolver(WavefunctionSolver):
             self.r_grid, V_eff_grid, E_total, self.mu
         )
 
+        wf  = np.nan_to_num(wf,  nan=0.0, posinf=0.0, neginf=0.0)
         dwf = np.nan_to_num(dwf, nan=0.0, posinf=0.0, neginf=0.0)
-        wf, norm = self._normalize_wavefunction(wf)
-        dwf /= norm     # derivative carries the same normalisation factor
+
+        # Rescale the raw Numerov solution (arbitrary shooting amplitude).
+        if normalization == "box":
+            # ∫|F(R)|² dR = 1 over [r_min, r_max].  L-dependent (legacy path).
+            wf, norm = self._box_normalize(wf)
+            dwf /= norm
+        else:  # "unit_amplitude"
+            # Scale so the asymptotic envelope F → sin(kR − Jπ/2 + δ) has
+            # unit amplitude (Čížek/Bessel convention; box length drops out).
+            scale = self._asymptotic_amplitude(wf, dwf, k_eff)
+            wf  = wf / scale
+            dwf = dwf / scale
+
+        # Amplitude of the returned (normalized) F — a built-in self-check:
+        # ≈ 1.0 for "unit_amplitude", ≈ √(2/L) for "box".
+        amp_out = self._asymptotic_amplitude(wf, dwf, k_eff)
 
         phase_shift = self._extract_phase_shift(
             self.r_grid[-100:], wf[-100:], k_eff
@@ -447,6 +484,8 @@ class MorseAnalyticSolver(WavefunctionSolver):
         )
         # Attach the exact analytical derivative for wavefunction_derivative()
         state._analytical_derivative = dwf
+        state._asymptotic_amplitude  = amp_out
+        state._normalization         = normalization
 
         self._scattering_cache[cache_key] = state
         return state
@@ -464,6 +503,44 @@ class MorseAnalyticSolver(WavefunctionSolver):
             return brentq(eq, -np.pi, np.pi)
         except ValueError:
             return 0.0
+
+    def _asymptotic_amplitude(
+        self, f: np.ndarray, dwf: np.ndarray, k_eff: float
+    ) -> float:
+        """
+        Asymptotic amplitude A of a scattering wavefunction F → A sin(kR + φ).
+
+        Uses the envelope identity: for F = A sin(kR + φ) in the flat asymptotic
+        region (local wavenumber → k_eff), F² + (F'/k)² = A² is constant, since
+        sin² + cos² = 1.  This needs no phase fit and is robust to the standing-
+        wave phase.  The median over the outer tail (excluding grid edges)
+        suppresses the small residual wobble from the not-perfectly-flat
+        potential and any edge effects in the derivative.
+
+        Parameters
+        ----------
+        f : np.ndarray
+            Wavefunction on r_grid.
+        dwf : np.ndarray
+            Its derivative dF/dR on r_grid (the analytical TISE derivative).
+        k_eff : float
+            Asymptotic wavenumber √(2μ E_coll_eff).
+
+        Returns
+        -------
+        float
+            Asymptotic amplitude A (falls back to an L²-based estimate if k_eff
+            is non-positive or the envelope is degenerate).
+        """
+        n = len(f)
+        lo = max(0, n - 200)
+        hi = max(lo + 1, n - 5)          # drop the last few points (edge effects)
+        if k_eff <= 0.0:
+            # Standing wave ⟨sin²⟩ = ½ ⇒ A ≈ √2 · rms(f)
+            return float(np.sqrt(2.0 * np.mean(f[lo:hi] ** 2))) or 1.0
+        env = np.sqrt(f[lo:hi] ** 2 + (dwf[lo:hi] / k_eff) ** 2)
+        A = float(np.median(env))
+        return A if A > 0.0 else 1.0
 
     # ------------------------------------------------------------------
     # Derivative

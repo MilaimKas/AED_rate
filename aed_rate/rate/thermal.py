@@ -2,7 +2,8 @@
 Thermal AED rate constant via Boltzmann-weighted partial-wave summation.
 
 Computes:
-    k(T) = prefactor × Σ_J (2J+1) × ∫₀^∞ √E × e^{-E/k_BT} × Σ_{v'} Rate(v',J; E,J) dE
+    k(T) = prefactor × ∫₀^∞ √E × e^{-E/k_BT}
+                      × [ Σ_J (2J+1) Σ_{v'} Rate(v',J; E,J) / (J_max(J_max+1)) ] dE
 
 using Gauss-Laguerre quadrature for the energy integral (natural for the
 exponential weight) and a J summation truncated at J_max(E) where the
@@ -14,13 +15,16 @@ References
 [2] Acharya, Das, Simons, JCP 83, 3888 (1985)
 """
 
+import warnings
+
 import numpy as np
 from typing import Optional
 
 from scipy.special import roots_laguerre
 
 from .state_to_state import AEDRateCalculator
-from ..utils.constants import CONSTANTS
+from ..electronic.potential import PotentialEnergyCurve
+from ..utils.constants import CONSTANTS, AEDValidationWarning
 
 
 class ThermalRateCalculator:
@@ -40,9 +44,18 @@ class ThermalRateCalculator:
     def __init__(
         self,
         rate_calculator: AEDRateCalculator,
-        anion_potential,
+        anion_potential: PotentialEnergyCurve,
         reduced_mass: float,
     ):
+        warnings.warn(
+            "ThermalRateCalculator builds on the box-normalized state-to-state "
+            "RATE (state_to_state_rate), which depends on the computational box "
+            "length r_max and is not validated. The absolute, box-independent "
+            "observable is the cross section (AEDRateCalculator.total_cross_section"
+            "_all_J); prefer k(T) = <σ v> built from that once available.",
+            AEDValidationWarning,
+            stacklevel=2,
+        )
         self.rate_calc = rate_calculator
         self.anion_potential = anion_potential
         self.mu = reduced_mass
@@ -153,17 +166,19 @@ class ThermalRateCalculator:
             if J_max <= 0:
                 continue
 
-            # Partial-wave sum: Σ_J (2J+1) × Rate(E, J) / J_max²
-            # The 1/J_max² normalization comes from the cross section → rate
-            # conversion (Acharya 1985 Eq. 11)
+            # Partial-wave sum: Σ_J (2J+1) × Rate(E, J) / [J_max(J_max+1)]
+            # The 1/[J_max(J_max+1)] normalization comes from the
+            # impact-parameter weighting P(J)dJ = (2J+1)dJ / [J_max(J_max+1)]
+            # (Acharya 1985 Eq. 4). This is exact; J_max² is only the
+            # large-J_max approximation.
             J_sum = 0.0
             for J in range(0, J_max + 1, J_step):
                 rate_J = self._summed_rate_at_E_J(E, J, v_prime_max)
                 weight_J = (2 * J + 1) * J_step  # J_step accounts for skipping
                 J_sum += weight_J * rate_J
 
-            # Integrand: √E × J_sum / J_max²
-            rate_integral += w * np.sqrt(E) * J_sum / max(J_max ** 2, 1)
+            # Integrand: √E × J_sum / [J_max(J_max+1)]
+            rate_integral += w * np.sqrt(E) * J_sum / max(J_max * (J_max + 1), 1)
 
             # Clear coupling cache periodically to manage memory
             if i % 8 == 0:

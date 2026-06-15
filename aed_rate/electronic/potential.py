@@ -470,3 +470,46 @@ def create_oh_system_acharya() -> Tuple[MorsePotential, MorsePotential, float]:
     )
 
     return anion_pot, neutral_pot, EA
+
+
+def create_lih_system() -> Tuple[MorsePotential, MorsePotential, float]:
+    """
+    Create LiH⁻ and LiH Morse potentials from ab initio CCSD(T)/aug-cc-pVTZ.
+
+    A σ-HOMO test system (the detaching electron occupies the diffuse 3σ),
+    complementing the π-HOMO OH⁻ case.  Morse parameters were obtained by
+    fitting CCSD(T)/aug-cc-pVTZ potential energy curves
+    (scripts/compute_lih_pecs.py):
+
+      - LiH   : ¹Σ⁺ closed shell (RCCSD(T))
+      - LiH⁻  : ²Σ⁺ open shell, extra e⁻ in 3σ (UCCSD(T))
+
+    R_e and β agree with Acharya's published LiH values to a few percent and the
+    adiabatic EA (0.297 eV) matches their ~0.3 eV; D_e is ~10 % high (CCSD(T) +
+    finite scan / Morse fit).  NOTE: LiH⁻ is open-shell, so the CPSCF coupling
+    precompute (closed-shell only) does not yet apply to it.
+
+    Returns
+    -------
+    Tuple[MorsePotential, MorsePotential, float]
+        (anion_potential, neutral_potential, electron_affinity_in_Hartree)
+    """
+    # LiH⁻ (²Σ⁺): CCSD(T)/aug-cc-pVTZ Morse fit
+    anion_pot = MorsePotential(
+        D_e=0.0683,
+        r_e=3.2021,
+        beta=0.5765,
+        V_0=0.0,
+    )
+
+    # LiH (¹Σ⁺); adiabatic EA(LiH) = 0.297 eV = 0.01090 Hartree (CCSD(T))
+    EA = 0.01090
+
+    neutral_pot = MorsePotential(
+        D_e=0.0991,
+        r_e=3.0174,
+        beta=0.5922,
+        V_0=EA,
+    )
+
+    return anion_pot, neutral_pot, EA

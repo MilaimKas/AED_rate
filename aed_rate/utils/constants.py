@@ -9,6 +9,20 @@ from dataclasses import dataclass
 from typing import Dict
 
 
+class AEDValidationWarning(UserWarning):
+    """
+    Emitted when using code that is not validated against a benchmark, or that
+    carries a known caveat (an unvalidated solver, a sanity-check-only model,
+    or a normalization convention).  Advisory, not an error.
+
+    Silence with::
+
+        import warnings
+        from aed_rate.utils.constants import AEDValidationWarning
+        warnings.filterwarnings("ignore", category=AEDValidationWarning)
+    """
+
+
 @dataclass(frozen=True)
 class PhysicalConstants:
     """Physical constants in atomic units."""

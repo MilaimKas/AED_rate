@@ -643,3 +643,250 @@ def plot_coupling_curve(
 
     fig.tight_layout()
     return fig, axes
+
+
+# ======================================================================
+# 6. Scattering-state derivative dF_E/dR
+# ======================================================================
+
+def plot_scattering_derivative(
+    scattering_state,
+    derivative: Optional[np.ndarray] = None,
+    R_range: Optional[Tuple[float, float]] = None,
+    figsize: Tuple[float, float] = (8, 6),
+):
+    """
+    Plot the scattering wavefunction F_E(R) and its derivative dF_E/dR(R).
+
+    The radial coupling integral V_rad = (1/μ)∫ χ_{v'} m_rad (dF_E/dR) dR uses
+    dF_E/dR — the fast oscillator that drives the cancellation (its local
+    wavenumber is large in the inner Morse well).  This figure shows F_E and
+    dF_E/dR on a shared R axis so that oscillation can be inspected directly.
+
+    Parameters
+    ----------
+    scattering_state : ScatteringState
+        From solve_scattering_state.  If ``derivative`` is None, the function
+        uses ``scattering_state._analytical_derivative`` when present
+        (the exact TISE derivative from the Morse solver), else np.gradient.
+    derivative : np.ndarray, optional
+        dF_E/dR on the state's r_grid.  Pass the solver's
+        ``wavefunction_derivative(state)`` for the exact value.
+    R_range : (float, float), optional
+        Plot range in Bohr (default: full grid).
+    figsize : tuple
+        Figure size.
+
+    Returns
+    -------
+    fig, axes : matplotlib Figure and the two Axes (F, dF/dR).
+    """
+    _require_matplotlib()
+
+    r = scattering_state.r_grid
+    F = scattering_state.wavefunction
+    if derivative is None:
+        derivative = getattr(scattering_state, "_analytical_derivative", None)
+        if derivative is None:
+            derivative = np.gradient(F, r)
+
+    if R_range is None:
+        R_range = (r[0], r[-1])
+    mask = (r >= R_range[0]) & (r <= R_range[1])
+
+    fig, axes = plt.subplots(2, 1, figsize=figsize, sharex=True)
+    axes[0].plot(r[mask], F[mask], "b-", lw=1.2)
+    axes[0].axhline(0, color="k", lw=0.5, alpha=0.3)
+    axes[0].set_ylabel(r"$F_E(R)$", fontsize=12)
+    axes[0].set_title(
+        f"Scattering state: E = "
+        f"{scattering_state.E * CONSTANTS.hartree_to_cm1:.0f} cm⁻¹, "
+        f"J = {scattering_state.J}",
+        fontsize=12,
+    )
+    axes[1].plot(r[mask], np.asarray(derivative)[mask], "r-", lw=1.2)
+    axes[1].axhline(0, color="k", lw=0.5, alpha=0.3)
+    axes[1].set_ylabel(r"$dF_E/dR$", fontsize=12)
+    axes[1].set_xlabel("R (Bohr)", fontsize=12)
+    axes[1].set_xlim(R_range)
+
+    fig.tight_layout()
+    return fig, axes
+
+
+# ======================================================================
+# 7. Electronic intermediates: ∂φ_HOMO/∂R and the OPW φ_k (molecular plane)
+# ======================================================================
+
+def _dominant_real(field: np.ndarray) -> Tuple[np.ndarray, str]:
+    """Return (real or imaginary part, label) — whichever dominates in norm."""
+    field = np.asarray(field)
+    if np.iscomplexobj(field):
+        if np.linalg.norm(field.imag) > np.linalg.norm(field.real):
+            return field.imag, "Im"
+        return field.real, "Re"
+    return field, ""
+
+
+def plot_electronic_intermediates(
+    intermediates,
+    slab: float = 0.4,
+    figsize: Tuple[float, float] = (11, 9),
+    n_levels: int = 30,
+):
+    """
+    Contour the electronic coupling ingredients in the molecular (x–z) plane.
+
+    Four panels show, on a thin slab |y| < ``slab`` through the bond axis:
+    ∂φ_HOMO/∂R, ∂φ_HOMO/∂θ, and the two OPW continuum functions φ_k (radial /
+    rotational channels).  m_rad = Σ w φ_k_rad* ∂φ/∂R is the overlap of the
+    top-left and bottom-left panels (similarly m_rot, right column).
+
+    Built from a :class:`CouplingIntermediates` object
+    (ElectronicCoupling.compute_coupling_intermediates).  The Becke grid is
+    scattered, so panels use triangulated contours of points within the slab.
+
+    Parameters
+    ----------
+    intermediates : CouplingIntermediates
+        From ElectronicCoupling.compute_coupling_intermediates.
+    slab : float
+        Half-thickness (Bohr) of the |y| slab selected around the molecular plane.
+    figsize : tuple
+        Figure size.
+    n_levels : int
+        Number of filled-contour levels.
+
+    Returns
+    -------
+    fig, axes : matplotlib Figure and the 2×2 Axes array.
+    """
+    _require_matplotlib()
+
+    c = intermediates.coords
+    z, x, y = c[:, 2], c[:, 0], c[:, 1]            # bond axis = z, π direction = x
+    in_slab = np.abs(y) < slab
+    zz, xx = z[in_slab], x[in_slab]
+
+    fields = [
+        (intermediates.dphi_dR,      r"$\partial\varphi_{\rm HOMO}/\partial R$"),
+        (intermediates.dphi_dtheta,  r"$\partial\varphi_{\rm HOMO}/\partial\theta$"),
+        (intermediates.phi_k_rad,    r"OPW $\varphi_k$ (radial channel)"),
+        (intermediates.phi_k_rot,    r"OPW $\varphi_k$ (rotational channel)"),
+    ]
+
+    fig, axes = plt.subplots(2, 2, figsize=figsize, sharex=True, sharey=True)
+    for ax, (field, title) in zip(axes.flat, fields):
+        vals, part = _dominant_real(field)
+        vals = vals[in_slab]
+        vmax = np.max(np.abs(vals)) or 1.0
+        levels = np.linspace(-vmax, vmax, n_levels)
+        tcf = ax.tricontourf(zz, xx, vals, levels=levels, cmap="RdBu_r", extend="both")
+        fig.colorbar(tcf, ax=ax, shrink=0.85)
+        # atom markers: O at origin, H at z = R
+        ax.plot([0.0], [0.0], "ko", ms=7)
+        ax.plot([intermediates.R], [0.0], "k^", ms=7)
+        lbl = f"{part} {title}" if part else title
+        ax.set_title(lbl, fontsize=10)
+        ax.set_aspect("equal")
+
+    for ax in axes[-1, :]:
+        ax.set_xlabel("z — bond axis (Bohr)", fontsize=10)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("x (Bohr)", fontsize=10)
+    fig.suptitle(
+        f"Electronic coupling ingredients at R = {intermediates.R:.3f} Bohr, "
+        f"E_e = {intermediates.electron_energy * CONSTANTS.hartree_to_ev:.3f} eV "
+        f"(slab |y| < {slab} Bohr)",
+        fontsize=12,
+    )
+    fig.tight_layout()
+    return fig, axes
+
+
+# ======================================================================
+# 8. Coupling integrand and its phase cancellation
+# ======================================================================
+
+def plot_coupling_integrand(
+    r_grid: np.ndarray,
+    bound_wavefunction: np.ndarray,
+    m_rad_on_grid: np.ndarray,
+    scattering_derivative: np.ndarray,
+    label: str = "",
+    R_range: Optional[Tuple[float, float]] = None,
+    figsize: Tuple[float, float] = (8, 8),
+):
+    """
+    Visualize the radial coupling integrand and its near-cancellation.
+
+    The (un-normalized) radial coupling integral is
+
+        ∫ g(R) dR,   g(R) = χ_{v'}(R) · m_rad(R) · dF_E/dR
+
+    (V_rad = that integral divided by μ).  Two panels:
+      - the integrand g(R) — large +/- lobes;
+      - the running integral ∫^R g dR' normalized to its final value, which
+        overshoots far beyond 1 before settling, revealing why the result is a
+        small residual of heavy cancellation (and hence grid-sensitive).
+
+    All three inputs must be sampled on the same ``r_grid``.
+
+    Parameters
+    ----------
+    r_grid : np.ndarray
+        Radial grid (Bohr).
+    bound_wavefunction : np.ndarray
+        Neutral bound state χ_{v'}(R) on r_grid.
+    m_rad_on_grid : np.ndarray
+        Radial electronic coupling m_rad(R) on r_grid (real part used).
+    scattering_derivative : np.ndarray
+        dF_E/dR on r_grid (e.g. solver.wavefunction_derivative(state)).
+    label : str
+        Annotation for the curve (e.g. "v'=6, k_e=0.22").
+    R_range : (float, float), optional
+        Plot range in Bohr (default: full grid).
+    figsize : tuple
+        Figure size.
+
+    Returns
+    -------
+    fig, axes : matplotlib Figure and the two Axes (integrand, running integral).
+    """
+    _require_matplotlib()
+    from scipy.integrate import cumulative_trapezoid
+
+    g = (np.asarray(bound_wavefunction)
+         * np.asarray(m_rad_on_grid).real
+         * np.asarray(scattering_derivative))
+    C = cumulative_trapezoid(g, r_grid, initial=0.0)
+    C_final = C[-1]
+
+    if R_range is None:
+        R_range = (r_grid[0], r_grid[-1])
+    mask = (r_grid >= R_range[0]) & (r_grid <= R_range[1])
+
+    fig, axes = plt.subplots(2, 1, figsize=figsize, sharex=True)
+
+    axes[0].plot(r_grid[mask], g[mask], "b-", lw=1.2, label=label or None)
+    axes[0].axhline(0, color="k", lw=0.5, alpha=0.3)
+    axes[0].set_ylabel(r"integrand $g(R)=\chi\, m_{\rm rad}\, dF_E/dR$", fontsize=11)
+    axes[0].set_title("Coupling integrand and its phase cancellation", fontsize=12)
+    if label:
+        axes[0].legend(fontsize=9)
+
+    if abs(C_final) > 0:
+        axes[1].plot(r_grid[mask], (C / C_final)[mask], "g-", lw=1.2)
+    axes[1].axhline(1.0, color="k", ls="--", lw=0.6)
+    axes[1].axhline(0, color="k", lw=0.5, alpha=0.3)
+    axes[1].set_ylabel(r"$\int^R\! g\,dR' / \int^\infty\! g\,dR'$", fontsize=11)
+    axes[1].set_xlabel("R (Bohr)", fontsize=12)
+    axes[1].set_xlim(R_range)
+    # annotate the cancellation severity
+    overshoot = float(np.max(np.abs(C)) / abs(C_final)) if abs(C_final) > 0 else np.inf
+    axes[1].text(0.02, 0.95,
+                 f"final ∫g dR = {C_final:.2e}\novershoot ×{overshoot:.0f} → cancellation",
+                 transform=axes[1].transAxes, va="top", fontsize=9, style="italic")
+
+    fig.tight_layout()
+    return fig, axes

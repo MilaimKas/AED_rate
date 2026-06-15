@@ -1,3 +1,7 @@
 /.venv
 /aed_rate.egg-info
 /articles
+*pycache*
+*npz*
+*.pyc
+plots/*

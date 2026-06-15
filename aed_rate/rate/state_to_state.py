@@ -50,6 +50,26 @@ class StateToStateRate:
     V_rot: complex        # Rotational coupling integral (a.u.)
 
 
+@dataclass
+class CrossSection:
+    """
+    Result of a state-to-state AED cross-section calculation.
+
+    σ is in atomic units (a₀²).  Uses the Čížek (2001) convention (their
+    Eq. 2.7) in the weak-coupling limit, with a unit-amplitude
+    (spherical-Bessel) anion scattering state — see cross_section_state_to_state.
+    """
+
+    v_prime: int          # Final vibrational quantum number
+    J: int                # Initial angular momentum
+    J_prime: int          # Final angular momentum
+    E_collision: float    # Collision energy (Hartree)
+    sigma: float          # Cross section (a.u., a₀²)
+    electron_energy: float  # Ejected electron KE (Hartree)
+    V_rad: complex        # Radial coupling integral, unit-amplitude state (a.u.)
+    V_rot: complex        # Rotational coupling integral, unit-amplitude state (a.u.)
+
+
 # ---------------------------------------------------------------------------
 # Angular coupling coefficients
 # ---------------------------------------------------------------------------
@@ -208,7 +228,12 @@ class AEDRateCalculator:
         """
         Rotational coupling integral, ΔJ = ±1.
 
-        V_rot = (1/μ) × C(J,J') × ∫ F_{v'}(R) × m_rot(R) × F_E(R)/R  dR
+        V_rot = (1/μ) × C(J,J') × ∫ F_{v'}(R) × m_rot(R) × F_E(R)  dR
+
+        m_rot is defined as ∫ φ_k* ∂φ_HOMO/∂x_B d³r (nuclear coordinate
+        derivative), which already contains the 1/R factor via the body-fixed
+        frame angular momentum operator.  The nuclear integral therefore uses
+        plain F_E(R), not F_E(R)/R.
 
         Parameters
         ----------
@@ -228,9 +253,10 @@ class AEDRateCalculator:
             return complex(0.0)
 
         R_grid = self.anion_solver.r_grid
-        # F_E(R) / R — the angular derivative acts on Y_{JM}, not on F(R)
-        F_over_R = scattering.wavefunction / R_grid
-        integrand = bound.wavefunction * m_rot_on_grid * F_over_R
+        # Nuclear integral uses F_E(R)/R: the 1/R comes from how ∂/∂θ acts on
+        # the nuclear wavefunction F(R)/R × Y(Ω) in spherical coordinates.
+        # This is independent of the 1/R already inside m_rot(R) = ⟨φ_k|(1/R)∂φ/∂θ⟩.
+        integrand = bound.wavefunction * m_rot_on_grid * scattering.wavefunction / R_grid
 
         V_rot = C * simpson(integrand, x=R_grid) / self.mu
         return complex(V_rot)
@@ -354,6 +380,202 @@ class AEDRateCalculator:
             V_rad=V_rad,
             V_rot=V_rot,
         )
+
+    # ------------------------------------------------------------------
+    # Cross sections (Čížek 2001 convention, weak-coupling limit)
+    # ------------------------------------------------------------------
+
+    def cross_section_state_to_state(
+        self,
+        E_collision: float,
+        J: int,
+        v_prime: int,
+        J_prime: int,
+    ) -> CrossSection:
+        """
+        State-to-state AED cross section σ_{v',J'}(E; J).
+
+        Uses the Čížek (2001) partial-wave cross-section formula (their Eq. 2.7)
+        in the weak-coupling (perturbative) limit appropriate to the
+        non-resonant OH⁻ system:
+
+            σ = (2π²/E) (2J+1) ρ(E_e) |V_total|²
+
+        where V_total = V_rad + V_rot is the non-BO coupling integral evaluated
+        with a **unit-amplitude** (spherical-Bessel) anion scattering state
+        (F_{E,J} → sin(kR − Jπ/2 + δ)).  The factor ρ(E_e) = k_e/(2π²) converts
+        our box/L³-stripped OPW coupling to Čížek's energy-normalized
+        discrete↔continuum coupling V_dε (since |V_dε|² = ρ |m|², from the width
+        identity Γ = 2π|V_dε|² = 2π ρ |m|²).  Combining, σ = (2J+1)(k_e/E)|V|².
+
+        Unlike state_to_state_rate (box-normalized, L-dependent), σ is
+        independent of the computational box length L.
+
+        Parameters
+        ----------
+        E_collision : float
+            Collision energy in Hartree (relative to anion dissociation).
+        J, v_prime, J_prime : int
+            Initial angular momentum, final vibrational and rotational numbers.
+
+        Returns
+        -------
+        CrossSection
+            σ (a.u., a₀²) and intermediate quantities.
+        """
+        zero = CrossSection(
+            v_prime=v_prime, J=J, J_prime=J_prime,
+            E_collision=E_collision, sigma=0.0,
+            electron_energy=0.0, V_rad=0j, V_rot=0j,
+        )
+
+        # Selection rule: only ΔJ = 0, ±1
+        if abs(J_prime - J) > 1:
+            return zero
+
+        # Step 1: anion scattering state — UNIT AMPLITUDE (Čížek/Bessel).
+        # Channel may be closed by the Pekeris centrifugal barrier at high J.
+        try:
+            scattering = self.anion_solver.solve_scattering_state(
+                E_collision, J, normalization="unit_amplitude",
+            )
+        except ValueError:
+            return zero
+        except TypeError as exc:
+            # The solver does not support normalization='unit_amplitude'.
+            raise NotImplementedError(
+                "Cross sections require a unit-amplitude scattering state, "
+                "available only from the analytical Morse solver. Build the "
+                "calculator with solver_method='morse' (the current solver is "
+                f"{type(self.anion_solver).__name__})."
+            ) from exc
+
+        # Step 2: neutral bound state — may not exist at high J' (the centrifugal
+        # term reduces the number of bound vibrational levels).  If so, σ = 0.
+        try:
+            bound = self.neutral_solver.solve_bound_state(v_prime, J_prime)
+        except ValueError:
+            return zero
+
+        # Step 3: energy conservation → electron kinetic energy
+        # (identical bookkeeping to state_to_state_rate)
+        E_vib_neutral = bound.energy - self.neutral_potential.V_0
+        E_electron = compute_electron_kinetic_energy(
+            collision_energy=E_collision,
+            anion_vib_energy=self.anion_potential.D_e,
+            neutral_vib_energy=E_vib_neutral,
+            electron_affinity=self.EA,
+        )
+        if E_electron <= 0.0:
+            return zero
+
+        # Step 4: coupling on the R grid (depends on E_e via the OPW)
+        m_rad_grid, m_rot_grid = self._evaluate_coupling_on_grid(E_electron)
+
+        # Step 5: coupling integrals with the unit-amplitude scattering state
+        V_rad = 0j
+        V_rot = 0j
+        if J_prime == J:
+            V_rad = self.compute_coupling_integral_radial(
+                scattering, bound, m_rad_grid,
+            )
+        if J_prime == J + 1 or J_prime == J - 1:
+            V_rot = self.compute_coupling_integral_rotational(
+                scattering, bound, m_rot_grid, J, J_prime,
+            )
+
+        # Step 6: electron density of states ρ = k_e/(2π²)
+        continuum = ContinuumOrbital(kinetic_energy=E_electron)
+        rho = continuum.density_of_states()
+
+        # Step 7: Čížek Eq. 2.7 (weak-coupling), σ = (2π²/E)(2J+1) ρ |V|²
+        V_total = V_rad + V_rot
+        sigma = (
+            (2.0 * np.pi ** 2 / E_collision)
+            * (2 * J + 1)
+            * rho
+            * abs(V_total) ** 2
+        )
+
+        return CrossSection(
+            v_prime=v_prime, J=J, J_prime=J_prime,
+            E_collision=E_collision, sigma=float(sigma),
+            electron_energy=E_electron, V_rad=V_rad, V_rot=V_rot,
+        )
+
+    def total_cross_section(
+        self,
+        E_collision: float,
+        J: int,
+        v_max: Optional[int] = None,
+    ) -> float:
+        """
+        Total AD cross section for initial partial wave J at energy E.
+
+        Sums σ over all accessible final vibrational states v' and rotational
+        channels J' ∈ {J−1, J, J+1}.  σ_AD(E) is obtained by further summing
+        this over initial J (the (2J+1) partial-wave weight is already inside
+        each σ via Eq. 2.7).
+        """
+        if v_max is None:
+            all_states = self.neutral_solver.solve_all_bound_states(J=0)
+            v_max = len(all_states) - 1
+
+        total = 0.0
+        for v_prime in range(v_max + 1):
+            for J_prime in (J - 1, J, J + 1):
+                if J_prime < 0:
+                    continue
+                cs = self.cross_section_state_to_state(
+                    E_collision, J, v_prime, J_prime,
+                )
+                total += cs.sigma
+        return total
+
+    def total_cross_section_all_J(
+        self,
+        E_collision: float,
+        v_max: Optional[int] = None,
+        J_max: Optional[int] = None,
+    ) -> float:
+        """
+        Total AD cross section σ_AD(E), summed over initial partial waves J.
+
+            σ_AD(E) = Σ_J Σ_{v',J'} σ_{v',J→J'}(E)         [Čížek 2001, Eq. 2.8]
+
+        The (2J+1) partial-wave weight is already inside each σ (Eq. 2.7).  The
+        sum runs over open channels: it terminates at the first J for which the
+        anion scattering channel is closed by the Pekeris centrifugal barrier
+        (solve_scattering_state raises ValueError), since the barrier increases
+        monotonically with J.
+
+        Parameters
+        ----------
+        E_collision : float
+            Collision energy in Hartree.
+        v_max : int, optional
+            Maximum final vibrational quantum number (default: all bound).
+        J_max : int, optional
+            Hard cap on the partial-wave sum (default: until the channel closes).
+
+        Returns
+        -------
+        float
+            σ_AD(E) in atomic units (a₀²).
+        """
+        sigma_AD = 0.0
+        J = 0
+        while J_max is None or J <= J_max:
+            # Channel-open test: the centrifugal barrier closes all J ≥ this one.
+            try:
+                self.anion_solver.solve_scattering_state(
+                    E_collision, J, normalization="unit_amplitude",
+                )
+            except ValueError:
+                break
+            sigma_AD += self.total_cross_section(E_collision, J, v_max=v_max)
+            J += 1
+        return sigma_AD
 
     def summed_rate(
         self,

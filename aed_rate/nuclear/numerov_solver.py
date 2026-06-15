@@ -22,10 +22,13 @@ Limitations / status
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 from typing import List, Optional
 
 from ..electronic.potential import PotentialEnergyCurve
+from ..utils.constants import AEDValidationWarning
 from ._base_solver import BoundState, ScatteringState, WavefunctionSolver
 
 
@@ -53,6 +56,13 @@ class NumerovWavefunctionSolver(WavefunctionSolver):
         r_max: float = 20.0,
         n_grid: int = 2000,
     ) -> None:
+        warnings.warn(
+            "NumerovWavefunctionSolver is not validated against reference data. "
+            "Use solver_method='morse' (analytical Morse, recommended for coupling "
+            "integrals) or 'dvr' for production calculations.",
+            AEDValidationWarning,
+            stacklevel=2,
+        )
         super().__init__(potential, reduced_mass, r_min, r_max, n_grid)
 
     # ------------------------------------------------------------------
@@ -240,7 +250,7 @@ class NumerovWavefunctionSolver(WavefunctionSolver):
         elif len(f) < self.n_grid:
             f = np.pad(f, (0, self.n_grid - len(f)))
 
-        f_norm, norm = self._normalize_wavefunction(f)
+        f_norm, norm = self._box_normalize(f)
 
         return BoundState(
             v=v, J=J, energy=energy,
@@ -262,7 +272,8 @@ class NumerovWavefunctionSolver(WavefunctionSolver):
         g = self._g_array(E_total, J)
 
         f = self._numerov_outward(g, f0=0.0, f1=1e-10)
-        f_norm, _ = self._normalize_wavefunction(f)
+
+        f_norm, _ = self._box_normalize(f)
 
         k = np.sqrt(2.0 * self.mu * E_collision)
         phase_shift = self._extract_phase_shift(
