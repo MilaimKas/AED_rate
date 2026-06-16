@@ -10,11 +10,11 @@ requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",
     "scipy>=1.10",
+    "matplotlib>=3.5"
 ]
 
 [project.optional-dependencies]
 pyscf = ["pyscf>=2.3"]
-plot = ["matplotlib>=3.5"]
 
 [tool.setuptools.packages.find]
 include = ["aed_rate*"]
