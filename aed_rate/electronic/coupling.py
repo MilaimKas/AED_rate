@@ -46,10 +46,15 @@ class CouplingResult:
     """Result of electronic coupling calculation at one geometry."""
 
     R: float                    # bond length (Bohr)
-    m_rad: complex              # radial coupling matrix element
-    m_rot: complex              # rotational coupling matrix element
+    m_rad: complex              # radial coupling matrix element   (l=1 p-wave)
+    m_rot: complex              # rotational coupling matrix element (l=1 p-wave)
     electron_energy: float      # continuum electron kinetic energy (Hartree)
     k_electron: float           # electron wave vector magnitude (a.u.)
+    # l=0 s-wave coupling — non-zero only in the A1/σ-symmetry channel
+    # (radial for a σ HOMO, rotational for a π HOMO).  Distinct final electron
+    # state from the l=1 term, so it adds incoherently in the cross section.
+    m_swave: complex = 0j
+    swave_channel: Optional[str] = None   # 'rad', 'rot', or None (no s-wave)
 
 
 @dataclass
@@ -145,7 +150,12 @@ class ElectronicCoupling:
         mo1, _mo_e1 = hess.solve_mo1(
             mf.mo_energy, mf.mo_coeff, mf.mo_occ, h1ao,
         )
-        mo1 = np.array(mo1)  # (natm, 3, nao, nocc)
+        # UHF (open-shell anion) returns (mo1_α, mo1_β) — a 2-tuple of arrays
+        # with different shapes (nocc differs), so np.array(mo1) fails.  The
+        # detaching electron is the α SOMO (homo_idx is its α index), so keep α.
+        # RHF returns a single array.
+        is_uhf = np.ndim(mf.mo_occ) == 2
+        mo1 = np.asarray(mo1[0] if is_uhf else mo1)  # (natm, 3, nao, nocc[_α])
 
         result = (mol, mf, mo1, homo_idx)
         self._cpscf_cache[R] = result
@@ -309,9 +319,11 @@ class ElectronicCoupling:
         The neutral SCF uses the same basis as the anion to ensure
         consistent AO dimensions.
         """
-        # Build neutral molecule with same basis/geometry
-        # Use the anion mol's basis to guarantee AO dimension match
-        mol_neutral = self.es._build_molecule(R, charge=0, spin=1)
+        # Build the neutral (N−1 electrons) with the same basis/geometry.
+        # Detaching one electron: closed-shell anion → doublet neutral; open-shell
+        # anion → multiplicity drops by one (e.g. LiH⁻ ²Σ⁺ → LiH ¹Σ⁺ singlet).
+        neutral_spin = 1 if spin == 0 else spin - 1
+        mol_neutral = self.es._build_molecule(R, charge=charge + 1, spin=neutral_spin)
         from pyscf import scf
         mf_neutral = scf.UHF(mol_neutral)
         mf_neutral.kernel()
@@ -689,8 +701,11 @@ class InterpolatedCoupling:
         # Populated by precompute() — 2D arrays (n_R, n_ke)
         self._m_rad_2d: Optional[np.ndarray] = None
         self._m_rot_2d: Optional[np.ndarray] = None
+        self._m_swave_2d: Optional[np.ndarray] = None
         self._spl_m_rad = None   # RectBivariateSpline(R, k_e)
         self._spl_m_rot = None
+        self._spl_m_swave = None
+        self.swave_channel: Optional[str] = None   # 'rad', 'rot', or None
         self._is_precomputed: bool = False
 
     # ------------------------------------------------------------------
@@ -732,8 +747,10 @@ class InterpolatedCoupling:
         n = len(self.R_grid)
         n_ke = len(self.k_e_grid)
         # 2D arrays: rows = R geometry, columns = k_e value
-        m_rad_2d = np.zeros((n, n_ke))
-        m_rot_2d = np.zeros((n, n_ke))
+        m_rad_2d = np.zeros((n, n_ke))      # l=1 radial   (p-wave)
+        m_rot_2d = np.zeros((n, n_ke))      # l=1 rotational (p-wave)
+        m_swave_2d = np.zeros((n, n_ke))    # l=0 s-wave (A1/σ channel only)
+        swave_channel = "rot"               # set below from the HOMO symmetry
 
         # Phase reference: HOMO MO coefficient vector at previous geometry
         prev_homo_coeff: Optional[np.ndarray] = None
@@ -917,34 +934,42 @@ class InterpolatedCoupling:
             # MO values on grid: (N_grid, n_occ)
             neutral_mo_grid = ao_neutral @ mf_neutral.mo_coeff[:, neutral_occ_idx]
 
-            # Evaluate OPW integral at each k_e: m(R, k_e) = ∫ OPW × dphi d³r
+            # The A1/σ-symmetry derivative — the one that admits the l=0 s-wave —
+            # is the rotational channel for a π HOMO, the radial channel for a σ
+            # HOMO (the other channel is E1/π and gets no s-wave by symmetry).
+            swave_channel = "rot" if is_pi else "rad"
+            w = grids.weights
+
+            # Evaluate OPW integrals at each k_e: m(R, k_e) = ∫ OPW × dphi d³r
             for j, k_e in enumerate(self.k_e_grid):
-                # 3 j₁(k_e r) / r: at k_e r → 0 this → k_e (linear limit)
+                # l=1: 3 j₁(k_e r)/r → k_e as k_e r → 0 (linear limit).
                 j1_over_r = spherical_jn(1, k_e * r_safe) / r_safe
+                # l=0: j₀(k_e r) → 1 as k_e r → 0 (Rayleigh coeff 2l+1 = 1).
+                j0 = spherical_jn(0, k_e * r_safe)
 
                 # Bare partial-wave components
-                pw_rad = 3.0 * j1_over_r * coord_rad   # E1x / π_x
-                pw_rot = 3.0 * j1_over_r * coord_rot   # A1 / σ
+                pw_rad = 3.0 * j1_over_r * coord_rad   # l=1, radial-channel direction
+                pw_rot = 3.0 * j1_over_r * coord_rot   # l=1, rotational-channel direction
+                pw_sw = j0                             # l=0, spherically symmetric
 
-                # Orthogonalize to occupied neutral MOs:
-                # ⟨φ_i|pw⟩ = Σ_grid w × φ_i × pw
-                # φ_OPW = pw - Σ_i φ_i × ⟨φ_i|pw⟩
-                opw_rad = pw_rad.copy()
-                opw_rot = pw_rot.copy()
+                # Orthogonalize each to the occupied neutral MOs:
+                # φ_OPW = pw - Σ_i φ_i ⟨φ_i|pw⟩
+                opw_rad, opw_rot, opw_sw = pw_rad.copy(), pw_rot.copy(), pw_sw.copy()
                 for k_occ in range(neutral_mo_grid.shape[1]):
                     phi_i = neutral_mo_grid[:, k_occ]
-                    overlap_rad = float(np.sum(grids.weights * phi_i * pw_rad))
-                    overlap_rot = float(np.sum(grids.weights * phi_i * pw_rot))
-                    opw_rad -= phi_i * overlap_rad
-                    opw_rot -= phi_i * overlap_rot
+                    opw_rad -= phi_i * float(np.sum(w * phi_i * pw_rad))
+                    opw_rot -= phi_i * float(np.sum(w * phi_i * pw_rot))
+                    opw_sw  -= phi_i * float(np.sum(w * phi_i * pw_sw))
 
-                m_rad_2d[i, j] = float(
-                    np.sum(grids.weights * opw_rad * dphi_dR)
-                )
+                m_rad_2d[i, j] = float(np.sum(w * opw_rad * dphi_dR))
                 # 1/R factor: rotational coupling uses plain F_E (not F_E/R)
-                m_rot_2d[i, j] = float(
-                    np.sum(grids.weights * opw_rot * dphi_dtheta / R)
-                )
+                m_rot_2d[i, j] = float(np.sum(w * opw_rot * dphi_dtheta / R))
+                # s-wave overlaps the A1/σ derivative: ∂φ/∂R (σ HOMO, radial) or
+                # (1/R)∂φ/∂θ (π HOMO, rotational).
+                if swave_channel == "rad":
+                    m_swave_2d[i, j] = float(np.sum(w * opw_sw * dphi_dR))
+                else:
+                    m_swave_2d[i, j] = float(np.sum(w * opw_sw * dphi_dtheta / R))
 
             if verbose:
                 # Print values at the representative middle k_e
@@ -957,16 +982,22 @@ class InterpolatedCoupling:
         # 2D bicubic splines on (R_grid, k_e_grid)
         self._m_rad_2d = m_rad_2d
         self._m_rot_2d = m_rot_2d
+        self._m_swave_2d = m_swave_2d
+        self.swave_channel = swave_channel
         self._spl_m_rad = RectBivariateSpline(
             self.R_grid, self.k_e_grid, m_rad_2d, kx=3, ky=3
         )
         self._spl_m_rot = RectBivariateSpline(
             self.R_grid, self.k_e_grid, m_rot_2d, kx=3, ky=3
         )
+        self._spl_m_swave = RectBivariateSpline(
+            self.R_grid, self.k_e_grid, m_swave_2d, kx=3, ky=3
+        )
         self._is_precomputed = True
 
         if verbose:
-            print(f"Precomputation complete.  HOMO irrep detected: {homo_irrep_detected}")
+            print(f"Precomputation complete.  HOMO irrep detected: "
+                  f"{homo_irrep_detected}; s-wave channel: {swave_channel}")
 
     # ------------------------------------------------------------------
     # Symmetry-based HOMO identification
@@ -1076,10 +1107,13 @@ class InterpolatedCoupling:
         # 2D spline: evaluate at (R, k_e) — grid=False for scalar query
         m_rad = complex(float(self._spl_m_rad(R, k_e_clamped, grid=False)))
         m_rot = complex(float(self._spl_m_rot(R, k_e_clamped, grid=False)))
+        m_swave = (complex(float(self._spl_m_swave(R, k_e_clamped, grid=False)))
+                   if self._spl_m_swave is not None else 0j)
 
         return CouplingResult(
             R=R, m_rad=m_rad, m_rot=m_rot,
             electron_energy=electron_energy, k_electron=k_e,
+            m_swave=m_swave, swave_channel=self.swave_channel,
         )
 
     def compute_coupling_curve(
@@ -1112,6 +1146,8 @@ class InterpolatedCoupling:
             k_e_grid=self.k_e_grid,
             m_rad_2d=self._m_rad_2d,
             m_rot_2d=self._m_rot_2d,
+            m_swave_2d=self._m_swave_2d,
+            swave_channel=np.array([self.swave_channel or "none"]),
             R_min=np.array([self.R_min]),
             R_cutoff=np.array([self.R_cutoff]),
         )
@@ -1141,6 +1177,20 @@ class InterpolatedCoupling:
         self._spl_m_rot = RectBivariateSpline(
             self.R_grid, self.k_e_grid, self._m_rot_2d, kx=3, ky=3
         )
+
+        # s-wave channel — absent in pre-multichannel .npz files (→ no s-wave).
+        if "m_swave_2d" in data:
+            self._m_swave_2d = data["m_swave_2d"]
+            ch = str(data["swave_channel"][0]) if "swave_channel" in data else "none"
+            self.swave_channel = None if ch == "none" else ch
+            self._spl_m_swave = RectBivariateSpline(
+                self.R_grid, self.k_e_grid, self._m_swave_2d, kx=3, ky=3
+            )
+        else:
+            self._m_swave_2d = None
+            self.swave_channel = None
+            self._spl_m_swave = None
+
         self._is_precomputed = True
 
     @classmethod

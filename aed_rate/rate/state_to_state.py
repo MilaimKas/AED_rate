@@ -46,8 +46,9 @@ class StateToStateRate:
     E_collision: float    # Collision energy (Hartree)
     rate: float           # Fermi Golden Rule rate (a.u.)
     electron_energy: float  # Ejected electron KE (Hartree)
-    V_rad: complex        # Radial coupling integral (a.u.)
-    V_rot: complex        # Rotational coupling integral (a.u.)
+    V_rad: complex        # Radial coupling integral, l=1 p-wave (a.u.)
+    V_rot: complex        # Rotational coupling integral, l=1 p-wave (a.u.)
+    V_swave: complex = 0j  # l=0 s-wave coupling integral (A1/σ channel; a.u.)
 
 
 @dataclass
@@ -66,8 +67,9 @@ class CrossSection:
     E_collision: float    # Collision energy (Hartree)
     sigma: float          # Cross section (a.u., a₀²)
     electron_energy: float  # Ejected electron KE (Hartree)
-    V_rad: complex        # Radial coupling integral, unit-amplitude state (a.u.)
-    V_rot: complex        # Rotational coupling integral, unit-amplitude state (a.u.)
+    V_rad: complex        # Radial coupling integral, l=1 p-wave (a.u.)
+    V_rot: complex        # Rotational coupling integral, l=1 p-wave (a.u.)
+    V_swave: complex = 0j  # l=0 s-wave coupling integral (A1/σ channel; a.u.)
 
 
 # ---------------------------------------------------------------------------
@@ -160,12 +162,14 @@ class AEDRateCalculator:
 
     def _evaluate_coupling_on_grid(
         self, electron_energy: float,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Evaluate m_rad(R) and m_rot(R) on the solver's radial grid.
+        Evaluate m_rad(R), m_rot(R) and the l=0 s-wave m_swave(R) on the grid.
 
-        Caches the result keyed by electron_energy (since the OPW
-        depends on k_e = √(2E_e)).
+        m_rad/m_rot are the l=1 (p-wave) radial/rotational couplings; m_swave is
+        the l=0 contribution (non-zero only in the A1/σ-symmetry channel — zero
+        for couplings that do not provide it, e.g. ModelCoupling).  Cached by
+        electron_energy (the OPW depends on k_e = √(2E_e)).
         """
         # Round to avoid floating-point cache misses
         key = round(electron_energy, 12)
@@ -175,14 +179,16 @@ class AEDRateCalculator:
         R_grid = self.anion_solver.r_grid
         m_rad = np.zeros(len(R_grid), dtype=complex)
         m_rot = np.zeros(len(R_grid), dtype=complex)
+        m_swave = np.zeros(len(R_grid), dtype=complex)
 
         for i, R in enumerate(R_grid):
             result = self.coupling.compute_coupling_at_r(R, electron_energy)
             m_rad[i] = result.m_rad
             m_rot[i] = result.m_rot
+            m_swave[i] = getattr(result, "m_swave", 0j)
 
-        self._coupling_cache[key] = (m_rad, m_rot)
-        return m_rad, m_rot
+        self._coupling_cache[key] = (m_rad, m_rot, m_swave)
+        return m_rad, m_rot, m_swave
 
     # ------------------------------------------------------------------
     # Coupling integrals
@@ -260,6 +266,47 @@ class AEDRateCalculator:
 
         V_rot = C * simpson(integrand, x=R_grid) / self.mu
         return complex(V_rot)
+
+    def _coupling_integrals(
+        self,
+        scattering: ScatteringState,
+        bound: BoundState,
+        J: int,
+        J_prime: int,
+        m_rad_grid: np.ndarray,
+        m_rot_grid: np.ndarray,
+        m_swave_grid: np.ndarray,
+    ) -> Tuple[complex, complex, complex]:
+        """
+        Coupling integrals for a transition: (V_rad, V_rot, V_swave).
+
+        V_rad (ΔJ=0) and V_rot (ΔJ=±1) are the l=1 p-wave integrals — only one is
+        nonzero for a given J'.  V_swave is the l=0 s-wave integral, nonzero only
+        when the coupling's A1/σ channel (``swave_channel``) matches this J'
+        channel: 'rad' (σ HOMO, ΔJ=0) or 'rot' (π HOMO, ΔJ=±1).  Couplings that
+        do not provide an s-wave (e.g. ModelCoupling) give V_swave = 0.
+        """
+        swave_channel = getattr(self.coupling, "swave_channel", None)
+        V_rad = 0j
+        V_rot = 0j
+        V_swave = 0j
+        if J_prime == J:
+            V_rad = self.compute_coupling_integral_radial(
+                scattering, bound, m_rad_grid,
+            )
+            if swave_channel == "rad":
+                V_swave = self.compute_coupling_integral_radial(
+                    scattering, bound, m_swave_grid,
+                )
+        if J_prime == J + 1 or J_prime == J - 1:
+            V_rot = self.compute_coupling_integral_rotational(
+                scattering, bound, m_rot_grid, J, J_prime,
+            )
+            if swave_channel == "rot":
+                V_swave = self.compute_coupling_integral_rotational(
+                    scattering, bound, m_swave_grid, J, J_prime,
+                )
+        return V_rad, V_rot, V_swave
 
     # ------------------------------------------------------------------
     # State-to-state rate
@@ -343,32 +390,23 @@ class AEDRateCalculator:
                 electron_energy=0.0, V_rad=0j, V_rot=0j,
             )
 
-        # Step 5: evaluate electronic coupling on the R grid
-        m_rad_grid, m_rot_grid = self._evaluate_coupling_on_grid(E_electron)
+        # Step 5: evaluate electronic coupling on the R grid (l=1 + l=0 s-wave)
+        m_rad_grid, m_rot_grid, m_swave_grid = self._evaluate_coupling_on_grid(E_electron)
 
-        # Step 6: compute coupling integrals
-        V_rad = 0j
-        V_rot = 0j
-
-        if J_prime == J:
-            # Radial coupling: ΔJ = 0
-            V_rad = self.compute_coupling_integral_radial(
-                scattering, bound, m_rad_grid,
-            )
-        if J_prime == J + 1 or J_prime == J - 1:
-            # Rotational coupling: ΔJ = ±1
-            V_rot = self.compute_coupling_integral_rotational(
-                scattering, bound, m_rot_grid, J, J_prime,
-            )
+        # Step 6: coupling integrals (l=1 radial/rotational, + l=0 s-wave)
+        V_rad, V_rot, V_swave = self._coupling_integrals(
+            scattering, bound, J, J_prime, m_rad_grid, m_rot_grid, m_swave_grid,
+        )
 
         # Step 7: density of states ρ = k_e / (2π²)
         continuum = ContinuumOrbital(kinetic_energy=E_electron)
         rho = continuum.density_of_states()
 
-        # Step 8: Fermi Golden Rule
-        # V_total = V_rad + V_rot (for a given J', at most one is nonzero)
-        V_total = V_rad + V_rot
-        rate = 2.0 * np.pi * rho * abs(V_total) ** 2
+        # Step 8: Fermi Golden Rule.  V_rad + V_rot is the l=1 amplitude (only one
+        # is nonzero for a given J'); the l=0 s-wave is a distinct final electron
+        # state, so it adds incoherently (|·|² sum).
+        V_l1 = V_rad + V_rot
+        rate = 2.0 * np.pi * rho * (abs(V_l1) ** 2 + abs(V_swave) ** 2)
 
         return StateToStateRate(
             v_prime=v_prime,
@@ -379,6 +417,7 @@ class AEDRateCalculator:
             electron_energy=E_electron,
             V_rad=V_rad,
             V_rot=V_rot,
+            V_swave=V_swave,
         )
 
     # ------------------------------------------------------------------
@@ -470,37 +509,33 @@ class AEDRateCalculator:
             return zero
 
         # Step 4: coupling on the R grid (depends on E_e via the OPW)
-        m_rad_grid, m_rot_grid = self._evaluate_coupling_on_grid(E_electron)
+        m_rad_grid, m_rot_grid, m_swave_grid = self._evaluate_coupling_on_grid(E_electron)
 
-        # Step 5: coupling integrals with the unit-amplitude scattering state
-        V_rad = 0j
-        V_rot = 0j
-        if J_prime == J:
-            V_rad = self.compute_coupling_integral_radial(
-                scattering, bound, m_rad_grid,
-            )
-        if J_prime == J + 1 or J_prime == J - 1:
-            V_rot = self.compute_coupling_integral_rotational(
-                scattering, bound, m_rot_grid, J, J_prime,
-            )
+        # Step 5: coupling integrals (unit-amplitude scattering state):
+        # l=1 radial/rotational + l=0 s-wave.
+        V_rad, V_rot, V_swave = self._coupling_integrals(
+            scattering, bound, J, J_prime, m_rad_grid, m_rot_grid, m_swave_grid,
+        )
 
         # Step 6: electron density of states ρ = k_e/(2π²)
         continuum = ContinuumOrbital(kinetic_energy=E_electron)
         rho = continuum.density_of_states()
 
-        # Step 7: Čížek Eq. 2.7 (weak-coupling), σ = (2π²/E)(2J+1) ρ |V|²
-        V_total = V_rad + V_rot
+        # Step 7: Čížek Eq. 2.7 (weak-coupling), σ = (2π²/E)(2J+1) ρ |V|².
+        # l=1 (V_rad+V_rot) and l=0 (V_swave) are distinct final electron states
+        # → incoherent (|·|²) sum of partial-wave channels.
+        V_l1 = V_rad + V_rot
         sigma = (
             (2.0 * np.pi ** 2 / E_collision)
             * (2 * J + 1)
             * rho
-            * abs(V_total) ** 2
+            * (abs(V_l1) ** 2 + abs(V_swave) ** 2)
         )
 
         return CrossSection(
             v_prime=v_prime, J=J, J_prime=J_prime,
             E_collision=E_collision, sigma=float(sigma),
-            electron_energy=E_electron, V_rad=V_rad, V_rot=V_rot,
+            electron_energy=E_electron, V_rad=V_rad, V_rot=V_rot, V_swave=V_swave,
         )
 
     def total_cross_section(
