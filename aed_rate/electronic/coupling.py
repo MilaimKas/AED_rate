@@ -757,6 +757,16 @@ class InterpolatedCoupling:
         # HOMO symmetry label detected at first geometry (used for OPW direction)
         homo_irrep_detected: Optional[str] = None
 
+        # SCF continuity ("chained" SCF): seed each geometry from the previous
+        # geometry's converged density.  A diffuse near-dissociation anion has a
+        # flat SCF landscape with several near-degenerate solutions; solving each
+        # R independently lands on different ones, so the HOMO character (and thus
+        # ∂φ/∂R) jumps between neighbours and the coupling spikes.  Propagating the
+        # density outward from the compact small-R end (R_grid must be ascending)
+        # follows a single adiabatic solution and removes the spurious spikes.
+        anion_dm0: Optional[np.ndarray] = None
+        neutral_dm0: Optional[np.ndarray] = None
+
         if verbose:
             print(
                 f"InterpolatedCoupling: precomputing CPSCF on {n} R points "
@@ -782,7 +792,8 @@ class InterpolatedCoupling:
 
             mf = scf.UHF(mol) if is_uhf else scf.RHF(mol)
             mf.verbose = 0
-            mf.kernel()
+            mf.kernel(dm0=anion_dm0)          # seed from previous geometry
+            anion_dm0 = mf.make_rdm1()        # carry forward to the next R
 
             # Work in the α channel: for an open-shell anion the detaching
             # electron is the α SOMO; for a closed shell this is the only channel.
@@ -925,7 +936,8 @@ class InterpolatedCoupling:
             mf_neutral = (scf.RHF(mol_neutral) if neutral_spin == 0
                           else scf.ROHF(mol_neutral))
             mf_neutral.verbose = 0
-            mf_neutral.kernel()
+            mf_neutral.kernel(dm0=neutral_dm0)   # chained SCF (see anion above)
+            neutral_dm0 = mf_neutral.make_rdm1()
 
             # Occupied neutral MOs evaluated on the Becke grid
             # (use the anion grid coords — same atom positions)
