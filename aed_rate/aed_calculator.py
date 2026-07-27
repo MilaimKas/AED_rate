@@ -489,6 +489,10 @@ class AEDSystem:
           3. ``scattering``    — anion scattering state F_E(R) + V_eff
           4. ``scatt_deriv``   — dF_E/dR (the fast oscillator)
           5. ``coupling``      — m_rad(R), m_rot(R) over a coarse R grid
+          5b. ``coupling_strength`` — |m_rad|,|m_rot|,|m_swave| vs R *(precomputed
+              InterpolatedCoupling only)*
+          5c. ``orbital_sensitivity`` — ‖∂φ_HOMO/∂R‖,‖∂φ_HOMO/∂θ‖ vs R *(only if the
+              coupling stored the screen)*
           6. ``integrand``     — χ_{v'}·m_rad·dF_E/dR and its running integral
           7. ``electronic``    — ∂φ/∂R and the OPW φ_k *(only if the coupling
              exposes ``compute_coupling_intermediates``, e.g. ElectronicCoupling)*
@@ -576,6 +580,23 @@ class AEDSystem:
         figs["scattering"] = plotting.plot_scattering_state(scatt, anion, self.mu, J=J)[0]
         figs["scatt_deriv"] = plotting.plot_scattering_derivative(scatt, dF_dR)[0]
         figs["coupling"] = plotting.plot_coupling_curve(coup)[0]
+
+        # Coupling-strength screen — only for a precomputed InterpolatedCoupling
+        # (needs the R/k_e grid + fast spline; skipped for Model/ElectronicCoupling).
+        if all(hasattr(self.coupling, a)
+               for a in ("compute_coupling_at_r", "k_e_grid", "R_grid")):
+            figs["coupling_strength"] = plotting.plot_coupling_strength(
+                self.coupling, electron_energy=E_e,
+            )[0]
+
+        # Intrinsic orbital-sensitivity screen — only if ‖∂φ/∂R‖ was stored
+        # (recent precompute; absent from older .npz).
+        if hasattr(self.coupling, "orbital_derivative_norm"):
+            if self.coupling.orbital_derivative_norm()[1] is not None:
+                figs["orbital_sensitivity"] = plotting.plot_orbital_sensitivity(
+                    self.coupling,
+                )[0]
+
         figs["integrand"] = plotting.plot_coupling_integrand(
             R_grid, bound.wavefunction, m_rad_grid, dF_dR,
             label=f"v'={v_prime}, k_e={np.sqrt(2*E_e):.3f}",

@@ -645,6 +645,168 @@ def plot_coupling_curve(
     return fig, axes
 
 
+def plot_coupling_strength(
+    coupling,
+    electron_energy: Optional[float] = None,
+    n_R: int = 200,
+    log_scale: bool = True,
+    label: Optional[str] = None,
+    ax=None,
+    figsize: Tuple[float, float] = (8, 5.0),
+):
+    """
+    Plot the electronic non-BO coupling strength vs internuclear distance R.
+
+    A fast screening tool (reads a precomputed ``InterpolatedCoupling`` directly,
+    no PySCF) for finding systems whose anion HOMO varies rapidly with R — the
+    regime where non-Born-Oppenheimer electron ejection is significant.  The
+    coupling m(R) = <OPW_{k_e} | dφ_HOMO/dR> measures exactly that R-sensitivity
+    projected onto the ejected electron, so a large |m| flags a fast-varying
+    orbital (e.g. the diffuse 3σ of LiH⁻ vs the compact π of OH⁻).
+
+    Parameters
+    ----------
+    coupling : InterpolatedCoupling
+        A precomputed coupling (from ``precompute()`` or ``from_npz()``).
+    electron_energy : float, optional
+        Ejected-electron energy (Hartree) at which to evaluate the coupling.
+        Defaults to the lowest k_e on the grid — the closest-to-orbital-
+        derivative (low-k) limit, least contaminated by continuum oscillation.
+    n_R : int
+        Number of R points to sample across the coupling's R range.
+    log_scale : bool
+        Log y-axis (recommended — couplings span orders of magnitude between
+        systems).
+    label : str, optional
+        System name prepended to the title / used in legend for overlays.
+    ax : matplotlib Axes, optional
+        Plot into an existing Axes (to overlay several systems); a new figure
+        is created if omitted.
+    figsize : tuple
+        Figure size (ignored when ``ax`` is supplied).
+
+    Returns
+    -------
+    fig, ax : matplotlib Figure and Axes
+    """
+    _require_matplotlib()
+
+    # Default to the lowest grid k_e: the low-k OPW limit is the least
+    # continuum-contaminated proxy for the bare orbital R-derivative.
+    if electron_energy is None:
+        electron_energy = 0.5 * float(coupling.k_e_grid[0]) ** 2
+    k_e = float(np.sqrt(2.0 * electron_energy))
+
+    R = np.linspace(float(coupling.R_grid[0]), float(coupling.R_grid[-1]), n_R)
+    m_rad = np.empty(n_R)
+    m_rot = np.empty(n_R)
+    m_sw = np.empty(n_R)
+    for i, r in enumerate(R):
+        cr = coupling.compute_coupling_at_r(r, electron_energy)
+        m_rad[i] = abs(cr.m_rad)
+        m_rot[i] = abs(cr.m_rot)
+        m_sw[i] = abs(cr.m_swave)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+
+    pre = f"{label}: " if label else ""
+    ax.plot(R, m_rad, "-", lw=2, label=f"{pre}|m_rad| (radial, l=1)")
+    ax.plot(R, m_rot, "-", lw=2, label=f"{pre}|m_rot| (rotational, l=1)")
+    swch = getattr(coupling, "swave_channel", None)
+    if np.any(m_sw > 0.0):
+        ax.plot(R, m_sw, "--", lw=2,
+                label=f"{pre}|m_swave| (l=0, {swch} channel)")
+
+    if log_scale:
+        ax.set_yscale("log")
+    ax.set_xlabel("R (Bohr)", fontsize=12)
+    ax.set_ylabel("electronic coupling strength (a.u.)", fontsize=12)
+    ax.set_title(
+        f"Non-BO coupling vs R  "
+        f"($E_e = {electron_energy * CONSTANTS.hartree_to_ev:.2f}$ eV, "
+        f"$k_e = {k_e:.2f}$ a.u.)",
+        fontsize=12,
+    )
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    return fig, ax
+
+
+def plot_orbital_sensitivity(
+    coupling,
+    log_scale: bool = False,
+    label: Optional[str] = None,
+    ax=None,
+    figsize: Tuple[float, float] = (8, 5.0),
+):
+    """
+    Plot the k_e-independent orbital-sensitivity screen vs R.
+
+    Shows ‖∂φ_HOMO/∂R‖(R) and ‖∂φ_HOMO/∂θ‖(R) — the L2 norms of the anion HOMO's
+    CPSCF derivative field — i.e. how fast the detaching orbital changes *shape*
+    with bond stretch / rotation, **undressed of the ejected-electron continuum**.
+    This complements :func:`plot_coupling_strength` (which is that same derivative
+    projected onto the outgoing electron): a large intrinsic norm flags a system
+    where non-BO electron ejection can be significant.
+
+    Parameters
+    ----------
+    coupling : InterpolatedCoupling
+        A coupling precomputed with the orbital-sensitivity screen (recent
+        ``precompute()``).  Couplings loaded from older .npz files lack it.
+    log_scale : bool
+        Log y-axis.
+    label : str, optional
+        System name for the legend (useful when overlaying via ``ax``).
+    ax : matplotlib Axes, optional
+        Plot into an existing Axes (overlay several systems); new figure if None.
+    figsize : tuple
+        Figure size (ignored when ``ax`` is supplied).
+
+    Returns
+    -------
+    fig, ax : matplotlib Figure and Axes
+
+    Raises
+    ------
+    ValueError
+        If the coupling carries no orbital-sensitivity data (old .npz).
+    """
+    _require_matplotlib()
+
+    R, dR_norm, dth_norm = coupling.orbital_derivative_norm()
+    if dR_norm is None:
+        raise ValueError(
+            "This coupling has no orbital-sensitivity data — it was loaded from a "
+            ".npz written before the screen existed. Re-run precompute() to add it."
+        )
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+
+    pre = f"{label}: " if label else ""
+    ax.plot(R, dR_norm, "o-", lw=2, ms=4,
+            label=rf"{pre}$\|\partial\varphi_{{HOMO}}/\partial R\|$ (stretch)")
+    ax.plot(R, dth_norm, "s--", lw=2, ms=4,
+            label=rf"{pre}$\|\partial\varphi_{{HOMO}}/\partial\theta\|$ (rotation)")
+
+    if log_scale:
+        ax.set_yscale("log")
+    ax.set_xlabel("R (Bohr)", fontsize=12)
+    ax.set_ylabel("orbital-derivative norm (a.u.)", fontsize=12)
+    ax.set_title("Anion HOMO sensitivity to nuclear motion", fontsize=12)
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    return fig, ax
+
+
 # ======================================================================
 # 6. Scattering-state derivative dF_E/dR
 # ======================================================================

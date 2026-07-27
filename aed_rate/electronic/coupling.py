@@ -702,6 +702,9 @@ class InterpolatedCoupling:
         self._m_rad_2d: Optional[np.ndarray] = None
         self._m_rot_2d: Optional[np.ndarray] = None
         self._m_swave_2d: Optional[np.ndarray] = None
+        # k_e-independent orbital-sensitivity screen: ‖∂φ_HOMO/∂R‖(R), ‖∂φ_HOMO/∂θ‖(R)
+        self._dphi_dR_norm: Optional[np.ndarray] = None
+        self._dphi_dtheta_norm: Optional[np.ndarray] = None
         self._spl_m_rad = None   # RectBivariateSpline(R, k_e)
         self._spl_m_rot = None
         self._spl_m_swave = None
@@ -750,6 +753,9 @@ class InterpolatedCoupling:
         m_rad_2d = np.zeros((n, n_ke))      # l=1 radial   (p-wave)
         m_rot_2d = np.zeros((n, n_ke))      # l=1 rotational (p-wave)
         m_swave_2d = np.zeros((n, n_ke))    # l=0 s-wave (A1/σ channel only)
+        # 1D (per-R) orbital-derivative norms — k_e-independent screen (see below)
+        dphi_dR_norm_1d = np.zeros(n)       # ‖∂φ_HOMO/∂R‖
+        dphi_dtheta_norm_1d = np.zeros(n)   # ‖∂φ_HOMO/∂θ‖
         swave_channel = "rot"               # set below from the HOMO symmetry
 
         # Phase reference: HOMO MO coefficient vector at previous geometry
@@ -952,6 +958,15 @@ class InterpolatedCoupling:
             swave_channel = "rot" if is_pi else "rad"
             w = grids.weights
 
+            # Intrinsic orbital-sensitivity screen (k_e-INDEPENDENT): the L2 norm
+            # of the HOMO's CPSCF derivative field, ‖∂φ_HOMO/∂R‖ and ‖∂φ_HOMO/∂θ‖.
+            # This is the same dphi field that the coupling projects onto the OPW,
+            # but *undressed* of the continuum — a clean measure of how fast the
+            # detaching orbital changes shape with geometry.  Large values flag
+            # anions where non-BO ejection is strong (diffuse HOMO regime).
+            dphi_dR_norm_1d[i] = float(np.sqrt(np.sum(w * dphi_dR ** 2)))
+            dphi_dtheta_norm_1d[i] = float(np.sqrt(np.sum(w * dphi_dtheta ** 2)))
+
             # Evaluate OPW integrals at each k_e: m(R, k_e) = ∫ OPW × dphi d³r
             for j, k_e in enumerate(self.k_e_grid):
                 # l=1: 3 j₁(k_e r)/r → k_e as k_e r → 0 (linear limit).
@@ -995,6 +1010,8 @@ class InterpolatedCoupling:
         self._m_rad_2d = m_rad_2d
         self._m_rot_2d = m_rot_2d
         self._m_swave_2d = m_swave_2d
+        self._dphi_dR_norm = dphi_dR_norm_1d
+        self._dphi_dtheta_norm = dphi_dtheta_norm_1d
         self.swave_channel = swave_channel
         self._spl_m_rad = RectBivariateSpline(
             self.R_grid, self.k_e_grid, m_rad_2d, kx=3, ky=3
@@ -1137,6 +1154,18 @@ class InterpolatedCoupling:
             for R in R_grid
         ]
 
+    def orbital_derivative_norm(
+        self,
+    ) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
+        """
+        Return the k_e-independent orbital-sensitivity screen.
+
+        Returns ``(R_grid, ‖∂φ_HOMO/∂R‖, ‖∂φ_HOMO/∂θ‖)`` on the precompute R grid.
+        The two norm arrays are ``None`` for a coupling loaded from a .npz written
+        before this screen existed (re-run ``precompute()`` to populate them).
+        """
+        return self.R_grid, self._dphi_dR_norm, self._dphi_dtheta_norm
+
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
@@ -1152,8 +1181,7 @@ class InterpolatedCoupling:
         """
         if not self._is_precomputed:
             raise RuntimeError("Nothing to save — run precompute() first.")
-        np.savez(
-            path,
+        arrays = dict(
             R_grid=self.R_grid,
             k_e_grid=self.k_e_grid,
             m_rad_2d=self._m_rad_2d,
@@ -1163,6 +1191,12 @@ class InterpolatedCoupling:
             R_min=np.array([self.R_min]),
             R_cutoff=np.array([self.R_cutoff]),
         )
+        # Orbital-sensitivity norms — only if present (a coupling loaded from an
+        # older .npz has none; don't serialise None as an object array).
+        if self._dphi_dR_norm is not None:
+            arrays["dphi_dR_norm"] = self._dphi_dR_norm
+            arrays["dphi_dtheta_norm"] = self._dphi_dtheta_norm
+        np.savez(path, **arrays)
 
     def load(self, path: str) -> None:
         """
@@ -1202,6 +1236,12 @@ class InterpolatedCoupling:
             self._m_swave_2d = None
             self.swave_channel = None
             self._spl_m_swave = None
+
+        # Orbital-sensitivity norms — absent in pre-screen .npz files (→ None).
+        self._dphi_dR_norm = data["dphi_dR_norm"] if "dphi_dR_norm" in data else None
+        self._dphi_dtheta_norm = (
+            data["dphi_dtheta_norm"] if "dphi_dtheta_norm" in data else None
+        )
 
         self._is_precomputed = True
 
