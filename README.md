@@ -15,7 +15,14 @@ driving an electronic transition into the continuum. The theory follows Acharya,
 Kendall & Simons (1984/1985); the absolute cross-section normalization follows
 Čížek *et al.* (2001).
 
-### Foreworlds
+## References
+
+- Acharya, Kendall, Simons, *J. Am. Chem. Soc.* **106**, 3402 (1984).
+- Acharya, Das, Simons, *J. Chem. Phys.* **83**, 3888 (1985).
+- Čížek, Horáček, Thiel, Hotop, *J. Phys. B* **34**, 983 (2001).
+- Simons, *J. Phys. Chem. A* **102**, 6035 (1998).
+
+## Foreworlds
 
 I used to work on electronic structure and dynamics of molecular anions and I always wanted to implement the non-BO-detachment process for associative detachment reaction described in *Acharya et al.* However, due to lack of time and coding knowledge back in the days, the project was abounded. The rise of AI coding agent allowed me to pursue the goal as a side project.
 
@@ -38,15 +45,17 @@ afterwards (loading it, cross sections, rates) runs on numpy/scipy alone.
 
 ## Quick start
 
+Perform the calculation on the OH- system, orignally studied in the source papers.
 The electronic coupling is computed ab initio (CPSCF) once and cached to disk;
 all observables are then evaluated from the cached file.
 
 ```python
-# 1. Precompute the coupling once (needs PySCF) ----------------------------
+
 from aed_rate.electronic.potential import create_oh_system_acharya
 from aed_rate.electronic.wavefunctions import ElectronicStructure
 from aed_rate.electronic.coupling import InterpolatedCoupling
 
+# 1. Precompute the coupling once (needs PySCF) ----------------------------
 anion, neutral, EA = create_oh_system_acharya()
 es = ElectronicStructure("O", "H", basis="6-311+G**")     # diffuse-augmented
 coupling = InterpolatedCoupling(es, anion, n_points=40)
@@ -76,6 +85,44 @@ physical.
 
 ---
 
+## Studying a new system A⁻ + B
+
+Provide two Morse curves and the reduced mass, then precompute the coupling for
+your atoms — the precompute is system-agnostic (atoms and basis come from
+`ElectronicStructure`).
+
+```python
+from aed_rate.electronic.potential import MorsePotential
+from aed_rate.electronic.wavefunctions import ElectronicStructure
+from aed_rate.electronic.coupling import InterpolatedCoupling
+from aed_rate.rate.state_to_state import AEDRateCalculator
+from aed_rate.utils.constants import CONSTANTS, get_reduced_mass
+
+# hypothetic system with EA = 1eV
+EA = CONSTANTS.ev_to_hartree(1.0)                     # electron affinity of AB
+
+# The potentials will be scaled using EA
+anion   = MorsePotential(D_e=..., r_e=..., beta=..., V_0=0.0)   # anion min = 0
+neutral = MorsePotential(D_e=..., r_e=..., beta=..., V_0=EA)    # neutral min = EA
+mu = get_reduced_mass("A", "B")
+
+# precompute once (closed-shell anion; π HOMO tracking, σ via a generic fallback)
+es = ElectronicStructure("A", "B", basis="aug-cc-pVDZ")
+coupling = InterpolatedCoupling(es, anion, charge=-1, spin=0,
+                                homo_symmetry="pi", n_points=40)
+coupling.precompute()
+coupling.save("AB_coupling.npz")
+
+calc = AEDRateCalculator(
+    anion, neutral, EA, mu,
+    coupling=InterpolatedCoupling.from_npz("AB_coupling.npz"),
+    solver_method="morse", n_grid=6000,
+)
+calc.total_cross_section_all_J(CONSTANTS.cm1_to_hartree(66.0))    # σ_AD(E), a₀²
+```
+
+---
+
 ## Computing each step separately
 
 Every ingredient of the cross section is its own object, with a `compute_*`
@@ -90,9 +137,6 @@ from aed_rate.nuclear.nuclear_wavefunction import create_wavefunction_solver
 from aed_rate.utils.constants import CONSTANTS, get_reduced_mass
 from aed_rate.utils import plotting
 
-anion, neutral, EA = create_oh_system_acharya()
-mu = get_reduced_mass("O", "H")
-E  = CONSTANTS.cm1_to_hartree(66.0)
 
 # 1. Potential energy curves
 plotting.plot_potential_curves(anion, neutral, EA)
@@ -122,41 +166,6 @@ Each `plotting.*` function returns `(fig, axes)` for further customization.
 
 ---
 
-## Studying a new system A⁻ + B
-
-Provide two Morse curves and the reduced mass, then precompute the coupling for
-your atoms — the precompute is system-agnostic (atoms and basis come from
-`ElectronicStructure`).
-
-```python
-from aed_rate.electronic.potential import MorsePotential
-from aed_rate.electronic.wavefunctions import ElectronicStructure
-from aed_rate.electronic.coupling import InterpolatedCoupling
-from aed_rate.rate.state_to_state import AEDRateCalculator
-from aed_rate.utils.constants import CONSTANTS, get_reduced_mass
-
-EA = CONSTANTS.ev_to_hartree(1.0)                     # electron affinity of AB
-anion   = MorsePotential(D_e=..., r_e=..., beta=..., V_0=0.0)   # anion min = 0
-neutral = MorsePotential(D_e=..., r_e=..., beta=..., V_0=EA)    # neutral min = EA
-mu = get_reduced_mass("A", "B")
-
-# precompute once (closed-shell anion; π HOMO tracking, σ via a generic fallback)
-es = ElectronicStructure("A", "B", basis="aug-cc-pVDZ")
-coupling = InterpolatedCoupling(es, anion, charge=-1, spin=0,
-                                homo_symmetry="pi", n_points=40)
-coupling.precompute()
-coupling.save("AB_coupling.npz")
-
-calc = AEDRateCalculator(
-    anion, neutral, EA, mu,
-    coupling=InterpolatedCoupling.from_npz("AB_coupling.npz"),
-    solver_method="morse", n_grid=6000,
-)
-calc.total_cross_section_all_J(CONSTANTS.cm1_to_hartree(66.0))    # σ_AD(E), a₀²
-```
-
----
-
 ## Notes
 
 - **Use a diffuse-augmented basis** (e.g. `6-311+G**`, `aug-cc-pVDZ`): the anion
@@ -178,19 +187,18 @@ calc.total_cross_section_all_J(CONSTANTS.cm1_to_hartree(66.0))    # σ_AD(E), a�
 
 **Electronic structure**
 - Koopmans / frozen-orbital, single-determinant HF (CPSCF) — no electron correlation.
-- Closed-shell anion only (RHF, spin = 0); orbital tracking tuned for a π HOMO.
+- Closed- and open-shell anions (RHF / UHF-CPSCF); orbital tracking for π and σ HOMOs.
+- The non-BO coupling uses only the CPSCF *coefficient* response ∂C/∂R; the AO-derivative
+  ("Pulay") term ∂χ/∂R is neglected.
 
 **Continuum electron**
-- Orthogonalized plane wave: no electron–molecule interaction beyond
-  orthogonalization (no polarization or exchange potential).
-- Low-k (k·r ≲ 1) OPW, single l = 1 (p-wave) channel; the l = 0 s-wave is dropped
-  — exact for π HOMOs, an approximation for σ / diffuse orbitals.
+- Orthogonalized plane wave: no electron–molecule interaction beyond orthogonalization
+  (no dipole, polarization, or exchange potential distorting the outgoing electron).
+- Partial waves l = 0 (s) and l = 1 (p); l ≥ 2 neglected (threshold-suppressed).
 
 **Nuclear motion**
 - Morse potential curves; Pekeris approximation for the centrifugal term (J > 0).
 - The second-derivative (∇²) non-BO term is neglected (≈ 0.1–0.3 %).
-
-Research code — internally consistent but not benchmarked against experiment.
 
 ---
 
@@ -198,8 +206,8 @@ Research code — internally consistent but not benchmarked against experiment.
 
 | Module | Contents |
 |---|---|
-| `electronic/potential.py` | `MorsePotential`, `create_oh_system_acharya()` |
-| `electronic/coupling.py` | `InterpolatedCoupling` (precompute / `from_npz`), `ElectronicCoupling` (CPSCF), `ModelCoupling` |
+| `electronic/potential.py` | `MorsePotential`, `create_oh_system()`, `create_lih_system()` |
+| `electronic/coupling.py` | `InterpolatedCoupling` (precompute / `from_npz`), `ElectronicCoupling` (CPSCF), `ModelCoupling` (Gaussian model) |
 | `electronic/continuum.py` | `ContinuumOrbital`, OPW, electron density of states |
 | `nuclear/` | DVR / Numerov / Morse solvers; `create_wavefunction_solver()` |
 | `rate/state_to_state.py` | `AEDRateCalculator`: cross sections and rates |
@@ -207,11 +215,4 @@ Research code — internally consistent but not benchmarked against experiment.
 | `aed_calculator.py` | `AEDSystem` high-level facade + `diagnostic()` |
 | `utils/plotting.py` | per-step plotting helpers |
 
----
 
-## References
-
-- Acharya, Kendall, Simons, *J. Am. Chem. Soc.* **106**, 3402 (1984).
-- Acharya, Das, Simons, *J. Chem. Phys.* **83**, 3888 (1985).
-- Čížek, Horáček, Thiel, Hotop, *J. Phys. B* **34**, 983 (2001).
-- Simons, *J. Phys. Chem. A* **102**, 6035 (1998).
