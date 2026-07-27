@@ -6,7 +6,7 @@ the continuum electron wavefunction, as used in the AED theory.
 """
 
 import numpy as np
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Callable
 from scipy.special import spherical_jn
 
 try:
@@ -329,6 +329,129 @@ class SphericalContinuum:
         # The factor sqrt(2*mu/pi/hbar^2/k) for energy normalization
         # In atomic units with mu=1 (electron): sqrt(2/(pi*k))
         return np.sqrt(2.0 / (np.pi * self.k))
+
+
+class DistortedWave:
+    """
+    Distorted-wave partial-wave continuum in a central model potential.
+
+    The radial function of an electron with kinetic energy E_e and angular
+    momentum l moving in a central potential V(r), solving
+
+        u_l'' + [ k² − λ(λ+1)/r² − 2 V(r) ] u_l = 0,   u_l = r · R_l ,
+
+    by outward Numerov integration from the regular origin (u_l ~ r^{λ+1}), then
+    matching to free spherical Bessel functions in the asymptotic region to
+    extract the phase shift δ_l and normalise
+
+        R_l(r) → cos δ_l · j_l(kr) − sin δ_l · y_l(kr)   (∼ sin(kr−lπ/2+δ_l)/kr).
+
+    With V = 0 (and λ = l) this reduces to j_l(kr), δ_l = 0 — a drop-in
+    generalisation of the free partial wave the OPW currently uses.
+
+    The effective angular momentum ``lambda_eff`` (default l) replaces l in the
+    *centrifugal* term only; it is the hook for the point-dipole model, where the
+    dipole shifts l to a non-integer λ.  The asymptotic match still uses the
+    integer l, valid when V(r) is short-range so the wave is free at large r.
+
+    Parameters
+    ----------
+    kinetic_energy : float
+        Electron kinetic energy E_e in Hartree (k = sqrt(2 E_e)).
+    l : int
+        Partial-wave angular momentum (labels the asymptotic Bessel functions).
+    potential : callable, optional
+        Central potential V(r) in Hartree, vectorised over r (Bohr).  Must be
+        finite at ``r_min``.  None → free particle.
+    lambda_eff : float, optional
+        Effective angular momentum in the centrifugal term (default l).
+    r_min, r_max : float
+        Radial integration bounds (Bohr).  r_max must lie beyond the range of V
+        and several wavelengths out; defaults to several wavelengths.
+    n_grid : int
+        Number of integration points.
+    """
+
+    def __init__(
+        self,
+        kinetic_energy: float,
+        l: int,
+        potential: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+        lambda_eff: Optional[float] = None,
+        r_min: float = 1.0e-3,
+        r_max: Optional[float] = None,
+        n_grid: int = 6000,
+    ) -> None:
+        self.energy = kinetic_energy
+        self.l = int(l)
+        self.k = float(np.sqrt(2.0 * kinetic_energy))
+        self.potential = potential
+        self.lambda_eff = float(l) if lambda_eff is None else float(lambda_eff)
+        self.r_min = float(r_min)
+        if r_max is None:
+            # several wavelengths beyond the near region so the match is asymptotic
+            wavelength = 2.0 * np.pi / self.k if self.k > 0 else 50.0
+            r_max = max(60.0, 8.0 * wavelength)
+        self.r_max = float(r_max)
+        self.n_grid = int(n_grid)
+        self.phase_shift: float = 0.0
+        self._solve()
+
+    def _solve(self) -> None:
+        """Numerov-integrate u_l, then match asymptotically for δ_l and normalise."""
+        from scipy.special import spherical_yn
+
+        r = np.linspace(self.r_min, self.r_max, self.n_grid)
+        h = r[1] - r[0]
+        lam = self.lambda_eff
+        V = self.potential(r) if self.potential is not None else np.zeros_like(r)
+
+        # u'' = f(r) u  with  f = λ(λ+1)/r² + 2V − k²
+        f = lam * (lam + 1.0) / r ** 2 + 2.0 * V - self.k ** 2
+
+        # Numerov outward from the regular origin: u ~ r^{λ+1} (overall scale is
+        # fixed later by the asymptotic normalisation).
+        u = np.zeros_like(r)
+        u[0] = r[0] ** (lam + 1.0)
+        u[1] = r[1] ** (lam + 1.0)
+        c = h * h / 12.0
+        w = 1.0 - c * f                      # Numerov weight (1 − h²/12 f)
+        for n in range(1, self.n_grid - 1):
+            u[n + 1] = (2.0 * u[n] * (1.0 + 5.0 * c * f[n])
+                        - u[n - 1] * w[n - 1]) / w[n + 1]
+
+        R = u / r                            # radial function (arbitrary scale)
+
+        # Match R = a·j_l + b·y_l at two asymptotic radii ~quarter-wave apart:
+        #   a = N cos δ,  b = −N sin δ.
+        i2 = self.n_grid - 1
+        di = max(1, int((np.pi / (2.0 * self.k)) / h))   # ~quarter wavelength
+        i1 = max(0, i2 - di)
+        kr1, kr2 = self.k * r[i1], self.k * r[i2]
+        jl1, yl1 = spherical_jn(self.l, kr1), spherical_yn(self.l, kr1)
+        jl2, yl2 = spherical_jn(self.l, kr2), spherical_yn(self.l, kr2)
+        det = jl1 * yl2 - jl2 * yl1
+        a = (R[i1] * yl2 - R[i2] * yl1) / det
+        b = (R[i2] * jl1 - R[i1] * jl2) / det
+        N = float(np.hypot(a, b))
+        self.phase_shift = float(np.arctan2(-b, a))
+
+        self._r = r
+        self._R = R / (N if N != 0.0 else 1.0)   # → cos δ j_l − sin δ y_l
+
+    def radial_function(self, r: np.ndarray) -> np.ndarray:
+        """
+        Distorted radial function R_l^dist(r), normalised like ``j_l(kr)``.
+
+        Evaluated by cubic interpolation of the internal Numerov solution; zero
+        outside the integration range.
+        """
+        from scipy.interpolate import interp1d
+        r = np.atleast_1d(r)
+        interp = interp1d(
+            self._r, self._R, kind="cubic", bounds_error=False, fill_value=0.0,
+        )
+        return interp(r)
 
 
 def compute_electron_kinetic_energy(
