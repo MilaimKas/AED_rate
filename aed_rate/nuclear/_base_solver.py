@@ -82,6 +82,8 @@ class WavefunctionSolver(ABC):
         self.mu = reduced_mass
         self.r_min = r_min
         self.r_max = r_max
+        if n_grid < 2:
+            raise ValueError(f"n_grid must be >= 2, got {n_grid}")
         self.n_grid = n_grid
         self.r_grid = np.linspace(r_min, r_max, n_grid)
         self.dr = float(self.r_grid[1] - self.r_grid[0])
@@ -156,6 +158,8 @@ class WavefunctionSolver(ABC):
             Energy-normalized wavefunction and the box normalization constant
             (useful for rescaling the derivative by the same factor).
         """
+        if k <= 0.0:
+            raise ValueError(f"Asymptotic wavenumber k must be positive, got {k}")
         f_box, box_norm = self._box_normalize(f)
         L = self.r_max - self.r_min
         factor = float(np.sqrt(self.mu * L / (np.pi * k)))
