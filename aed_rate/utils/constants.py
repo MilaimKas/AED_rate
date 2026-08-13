@@ -146,8 +146,13 @@ def get_reduced_mass(atom1: str, atom2: str) -> float:
     float
         Reduced mass in atomic units (electron masses)
     """
-    m1 = ATOMIC_MASSES[atom1] * CONSTANTS.amu_to_me
-    m2 = ATOMIC_MASSES[atom2] * CONSTANTS.amu_to_me
+    try:
+        m1 = ATOMIC_MASSES[atom1] * CONSTANTS.amu_to_me
+        m2 = ATOMIC_MASSES[atom2] * CONSTANTS.amu_to_me
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown atom {exc.args[0]!r}. Supported: {sorted(ATOMIC_MASSES)}"
+        ) from exc
     return (m1 * m2) / (m1 + m2)
 
 
