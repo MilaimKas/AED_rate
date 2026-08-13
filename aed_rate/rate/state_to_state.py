@@ -234,12 +234,14 @@ class AEDRateCalculator:
         """
         Rotational coupling integral, ΔJ = ±1.
 
-        V_rot = (1/μ) × C(J,J') × ∫ F_{v'}(R) × m_rot(R) × F_E(R)  dR
+        V_rot = (1/μ) × C(J,J') × ∫ F_{v'}(R) × m_rot(R) × F_E(R) / R  dR
 
-        m_rot is defined as ∫ φ_k* ∂φ_HOMO/∂x_B d³r (nuclear coordinate
-        derivative), which already contains the 1/R factor via the body-fixed
-        frame angular momentum operator.  The nuclear integral therefore uses
-        plain F_E(R), not F_E(R)/R.
+        m_rot(R) = ⟨φ_k | ∂φ_HOMO/∂x_B⟩ is the transverse orbital derivative and
+        carries NO net 1/R: when m_rot is built, its 1/R divides out the R from
+        writing the frame rotation as ∂/∂θ = R·∂/∂x.  The single physical 1/R in
+        the integrand is the Coriolis factor — the rotational coupling 1/(μR²)
+        combined with that R gives (1/μR²)·R·m_rot = m_rot/(μR).  Hence the
+        nuclear integral uses F_E(R)/R.
 
         Parameters
         ----------
@@ -259,9 +261,9 @@ class AEDRateCalculator:
             return complex(0.0)
 
         R_grid = self.anion_solver.r_grid
-        # Nuclear integral uses F_E(R)/R: the 1/R comes from how ∂/∂θ acts on
-        # the nuclear wavefunction F(R)/R × Y(Ω) in spherical coordinates.
-        # This is independent of the 1/R already inside m_rot(R) = ⟨φ_k|(1/R)∂φ/∂θ⟩.
+        # F_E(R)/R: the single 1/R is the Coriolis factor.  m_rot = ⟨φ_k|∂φ/∂x⟩
+        # carries no net 1/R (see method docstring); the rotational coupling
+        # 1/(μR²) times the R from ∂/∂θ = R·∂/∂x leaves one 1/R here.
         integrand = bound.wavefunction * m_rot_on_grid * scattering.wavefunction / R_grid
 
         V_rot = C * simpson(integrand, x=R_grid) / self.mu
@@ -608,6 +610,13 @@ class AEDRateCalculator:
                 )
             except ValueError:
                 break
+            except TypeError as exc:
+                raise NotImplementedError(
+                    "Cross sections require a unit-amplitude scattering state, "
+                    "available only from the analytical Morse solver. Build the "
+                    "calculator with solver_method='morse' (current solver: "
+                    f"{type(self.anion_solver).__name__})."
+                ) from exc
             sigma_AD += self.total_cross_section(E_collision, J, v_max=v_max)
             J += 1
         return sigma_AD
