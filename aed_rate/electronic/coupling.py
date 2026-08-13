@@ -121,6 +121,18 @@ class ElectronicCoupling:
         self.grid_level = grid_level
         self.k_switchover = k_switchover
 
+        # This per-geometry class computes only the l=1 (m_rad, m_rot) coupling;
+        # it has no l=0 s-wave channel (m_swave = 0 always).  For production cross
+        # sections — especially σ-HOMO / near-threshold, where the s-wave can
+        # dominate — use InterpolatedCoupling, which includes it.
+        warnings.warn(
+            "ElectronicCoupling provides only the l=1 (radial/rotational) coupling "
+            "and omits the l=0 s-wave; it is intended for per-geometry inspection/"
+            "diagnostics. Use InterpolatedCoupling for production cross sections.",
+            AEDValidationWarning,
+            stacklevel=2,
+        )
+
         # Cache: R -> (mol, mf, mo1, homo_idx)
         self._cpscf_cache: dict = {}
 
@@ -260,7 +272,7 @@ class ElectronicCoupling:
             return self._evaluate_opw_low_k(coords, k_e, symmetry)
         else:
             return self._evaluate_opw_full(
-                R, coords, electron_energy, charge, spin,
+                R, coords, electron_energy, symmetry, charge, spin,
             )
 
     @staticmethod
@@ -308,6 +320,7 @@ class ElectronicCoupling:
         R: float,
         coords: np.ndarray,
         electron_energy: float,
+        symmetry: str = "sigma",
         charge: int = -1,
         spin: int = 0,
     ) -> np.ndarray:
@@ -318,6 +331,11 @@ class ElectronicCoupling:
         occupied MOs for orthogonalization, then evaluates on the grid.
         The neutral SCF uses the same basis as the anion to ensure
         consistent AO dimensions.
+
+        The plane-wave direction is matched to the requested continuum symmetry
+        (pi → along x, sigma → along z), consistent with the low-k branch
+        (phi_k ~ k_x·x for pi, k_z·z for sigma).  Without this, the radial and
+        rotational channels would both collapse onto the same z-directed wave.
         """
         # Build the neutral (N−1 electrons) with the same basis/geometry.
         # Detaching one electron: closed-shell anion → doublet neutral; open-shell
@@ -348,8 +366,17 @@ class ElectronicCoupling:
 
         ao_values = mol_neutral.eval_gto("GTOval_sph", coords)
 
-        # Default k-direction along z (bond axis)
-        return opw.evaluate_opw(coords, ao_values)
+        # k-direction matched to the continuum symmetry (see docstring): pi → x,
+        # sigma → z.  This is what keeps m_rad and m_rot distinct at high k·R.
+        if symmetry == "pi":
+            k_direction = np.array([1.0, 0.0, 0.0])
+        elif symmetry == "sigma":
+            k_direction = np.array([0.0, 0.0, 1.0])
+        else:
+            raise ValueError(
+                f"Unknown OPW symmetry '{symmetry}'. Use 'pi' or 'sigma'."
+            )
+        return opw.evaluate_opw(coords, ao_values, k_direction=k_direction)
 
     # ------------------------------------------------------------------
     # Coupling matrix elements
