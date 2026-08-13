@@ -172,6 +172,9 @@ class PotentialEnergyCurve:
             Effective potential in Hartree
         """
         r = np.atleast_1d(r)
+        if J != 0 and np.any(r <= 0.0):
+            raise ValueError("Radial distances must be positive for the J>0 "
+                             "centrifugal term.")
         v_bare = self(r)
         centrifugal = J * (J + 1) / (2.0 * reduced_mass * r**2)
         return v_bare + centrifugal

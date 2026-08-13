@@ -56,6 +56,10 @@ class ContinuumOrbital:
         mo_occ: Optional[np.ndarray] = None,
         overlap_matrix: Optional[np.ndarray] = None,
     ):
+        if kinetic_energy < 0.0:
+            raise ValueError(
+                f"kinetic_energy must be non-negative, got {kinetic_energy}"
+            )
         self.kinetic_energy = kinetic_energy
 
         # Wave vector magnitude: E = k^2/2 (in a.u.)
@@ -91,7 +95,10 @@ class ContinuumOrbital:
         np.ndarray
             Complex plane wave values
         """
-        k_vec = self.k * k_direction / np.linalg.norm(k_direction)
+        norm = np.linalg.norm(k_direction)
+        if norm <= 0.0:
+            raise ValueError("k_direction cannot be the zero vector.")
+        k_vec = self.k * k_direction / norm
         phase = r @ k_vec
         return np.exp(1j * phase)
 
@@ -241,6 +248,10 @@ class SphericalContinuum:
         l : int
             Angular momentum quantum number
         """
+        if kinetic_energy < 0.0:
+            raise ValueError(
+                f"kinetic_energy must be non-negative, got {kinetic_energy}"
+            )
         self.energy = kinetic_energy
         self.l = l
         self.k = np.sqrt(2.0 * kinetic_energy)
@@ -382,11 +393,24 @@ class DistortedWave:
         r_max: Optional[float] = None,
         n_grid: int = 6000,
     ) -> None:
+        if kinetic_energy < 0.0:
+            raise ValueError(
+                f"kinetic_energy must be non-negative, got {kinetic_energy}"
+            )
+        if r_min <= 0.0:
+            raise ValueError(f"r_min must be positive, got {r_min}")
+        if n_grid < 3:
+            raise ValueError(f"n_grid must be >= 3, got {n_grid}")
+        lam = float(l) if lambda_eff is None else float(lambda_eff)
+        if lam < -1.0:
+            raise ValueError(
+                f"lambda_eff must be >= -1 for a regular r^(lambda+1) seed, got {lam}"
+            )
         self.energy = kinetic_energy
         self.l = int(l)
         self.k = float(np.sqrt(2.0 * kinetic_energy))
         self.potential = potential
-        self.lambda_eff = float(l) if lambda_eff is None else float(lambda_eff)
+        self.lambda_eff = lam
         self.r_min = float(r_min)
         if r_max is None:
             # several wavelengths beyond the near region so the match is asymptotic
@@ -431,6 +455,11 @@ class DistortedWave:
         jl1, yl1 = spherical_jn(self.l, kr1), spherical_yn(self.l, kr1)
         jl2, yl2 = spherical_jn(self.l, kr2), spherical_yn(self.l, kr2)
         det = jl1 * yl2 - jl2 * yl1
+        if not np.isfinite(det) or det == 0.0:
+            raise ValueError(
+                "Asymptotic Bessel match is degenerate (det=0); check r_max/n_grid "
+                "so the two match radii are distinct and beyond the potential range."
+            )
         a = (R[i1] * yl2 - R[i2] * yl1) / det
         b = (R[i2] * jl1 - R[i1] * jl2) / det
         N = float(np.hypot(a, b))
@@ -438,6 +467,11 @@ class DistortedWave:
 
         self._r = r
         self._R = R / (N if N != 0.0 else 1.0)   # → cos δ j_l − sin δ y_l
+        # Cache the interpolator once — radial_function may be called many times.
+        from scipy.interpolate import interp1d
+        self._interp = interp1d(
+            self._r, self._R, kind="cubic", bounds_error=False, fill_value=0.0,
+        )
 
     def radial_function(self, r: np.ndarray) -> np.ndarray:
         """
@@ -446,12 +480,8 @@ class DistortedWave:
         Evaluated by cubic interpolation of the internal Numerov solution; zero
         outside the integration range.
         """
-        from scipy.interpolate import interp1d
         r = np.atleast_1d(r)
-        interp = interp1d(
-            self._r, self._R, kind="cubic", bounds_error=False, fill_value=0.0,
-        )
-        return interp(r)
+        return self._interp(r)
 
 
 def compute_electron_kinetic_energy(
