@@ -46,6 +46,8 @@ class VibDistribution:
 
     def peak_v(self) -> int:
         """v' with highest rate."""
+        if not self.rates:
+            raise ValueError("No vibrational channels — cannot report peak v'.")
         return max(self.rates, key=self.rates.get)
 
 
