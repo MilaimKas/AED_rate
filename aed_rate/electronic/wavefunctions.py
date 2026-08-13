@@ -293,5 +293,8 @@ class ElectronicStructure:
         occ = mf.mo_occ
         if isinstance(occ, tuple):
             occ = occ[0]
-        return int(np.where(occ > 0.5)[0][-1])
+        occ_idx = np.where(occ > 0.5)[0]
+        if occ_idx.size == 0:
+            raise ValueError("No occupied orbitals found — check charge/spin.")
+        return int(occ_idx[-1])
 
