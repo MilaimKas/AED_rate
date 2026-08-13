@@ -473,7 +473,7 @@ class MorseAnalyticSolver(WavefunctionSolver):
         amp_out = self._asymptotic_amplitude(wf, dwf, k_eff)
 
         phase_shift = self._extract_phase_shift(
-            self.r_grid[-100:], wf[-100:], k_eff
+            self.r_grid[-100:], wf[-100:], k_eff, J
         )
 
         state = ScatteringState(
@@ -491,14 +491,21 @@ class MorseAnalyticSolver(WavefunctionSolver):
         return state
 
     def _extract_phase_shift(
-        self, r: np.ndarray, f: np.ndarray, k_eff: float
+        self, r: np.ndarray, f: np.ndarray, k_eff: float, J: int = 0
     ) -> float:
-        """Asymptotic phase shift via root-finding on two points."""
+        """Asymptotic phase shift via root-finding on two points.
+
+        Matches F(R) ~ sin(k_eff·R − Jπ/2 + δ); the −Jπ/2 term makes δ the
+        physical phase shift for J>0 (display/diagnostic only — δ does not
+        enter the cross sections or rates).
+        """
         from scipy.optimize import brentq
         r1, r2 = r[-50], r[-10]
         f1, f2 = f[-50], f[-10]
+        a1 = k_eff * r1 - J * np.pi / 2.0
+        a2 = k_eff * r2 - J * np.pi / 2.0
         def eq(delta: float) -> float:
-            return f1 * np.sin(k_eff * r2 + delta) - f2 * np.sin(k_eff * r1 + delta)
+            return f1 * np.sin(a2 + delta) - f2 * np.sin(a1 + delta)
         try:
             return brentq(eq, -np.pi, np.pi)
         except ValueError:
