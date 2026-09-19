@@ -1,7 +1,21 @@
+# Environments and build artefacts
 /.venv
 /aed_rate.egg-info
+build/
+dist/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Literature (not redistributable)
 /articles
-*pycache*
-*npz*
-*.pyc
-plots/*
+
+# Generated data and figures
+*.npz
+/data/
+/plots/
+/analysis/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
