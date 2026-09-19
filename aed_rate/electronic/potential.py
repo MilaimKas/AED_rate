@@ -323,7 +323,9 @@ class MorsePotential(PotentialEnergyCurve):
 
         return result if result.size > 1 else float(result[0])
 
-    def vibrational_energies(self, reduced_mass: float, v_max: int = 20) -> np.ndarray:
+    def vibrational_energies(
+        self, reduced_mass: float, v_max: Optional[int] = None
+    ) -> np.ndarray:
         """
         Calculate analytical Morse vibrational energy levels.
 
@@ -333,8 +335,10 @@ class MorsePotential(PotentialEnergyCurve):
         ----------
         reduced_mass : float
             Reduced mass in atomic units
-        v_max : int
-            Maximum vibrational quantum number to calculate
+        v_max : int, optional
+            Highest vibrational quantum number to return.  Defaults to the
+            last level the Morse well actually supports; a larger value is
+            clipped to that limit.
 
         Returns
         -------
@@ -344,12 +348,16 @@ class MorsePotential(PotentialEnergyCurve):
         omega_e = self.beta * np.sqrt(2.0 * self.D_e / reduced_mass)
         x_e = omega_e / (4.0 * self.D_e)
 
-        v_values = np.arange(v_max + 1)
-        energies = omega_e * (v_values + 0.5) - omega_e * x_e * (v_values + 0.5) ** 2
+        # The Morse spectrum is a downward parabola in (v + 1/2): past its
+        # vertex at v + 1/2 = 1/(2 x_e) the formula turns over and predicts
+        # *decreasing* energies, which are not physical states.  The last
+        # bound level is therefore the last one below that vertex.  Testing
+        # E_v < D_e is not enough, since the spurious branch also lies below.
+        v_dissociation = int(np.floor(1.0 / (2.0 * x_e) - 0.5))
+        v_highest = v_dissociation if v_max is None else min(v_max, v_dissociation)
 
-        # Only return bound states
-        bound = energies < self.D_e
-        return energies[bound]
+        v_values = np.arange(v_highest + 1)
+        return omega_e * (v_values + 0.5) - omega_e * x_e * (v_values + 0.5) ** 2
 
     @classmethod
     def from_spectroscopic_constants(
