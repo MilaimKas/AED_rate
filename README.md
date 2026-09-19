@@ -22,30 +22,49 @@ Kendall & Simons (1984/1985); the absolute cross-section normalization follows
 - Čížek, Horáček, Thiel, Hotop, *J. Phys. B* **34**, 983 (2001).
 - Simons, *J. Phys. Chem. A* **102**, 6035 (1998).
 
-## Foreworlds
+## Foreword
 
-I used to work on electronic structure and dynamics of molecular anions and I always wanted to implement the non-BO-detachment process for associative detachment reaction described in *Acharya et al.* However, due to lack of time and coding knowledge back in the days, the project was abounded. The rise of AI coding agent allowed me to pursue the goal as a side project.
+I used to work on the electronic structure and dynamics of molecular anions, and
+I always wanted to implement the non-BO detachment process for the associative
+detachment reaction described in *Acharya et al.* Back then, a lack of time and
+of coding knowledge left the project abandoned. The rise of AI coding agents let
+me pursue it as a side project.
 
-This package has been almost entirely vibe-coded (using Claude Sonnet and Opus). I have a deep understanding of the underlying theory and needed to guide the AI assistant but the code is entriely AI generated. **It has not been fully reviewed, neither the physics nor the code. Only sanity checked.**     
+This package has been almost entirely vibe-coded (using Claude Sonnet and Opus).
+I have a deep understanding of the underlying theory and had to guide the
+assistant, but the code is entirely AI generated. **It has not been fully
+reviewed, neither the physics nor the code. Only sanity checked.**
 
 ---
 
 ## Installation
 
 ```bash
-pip install -e .                 # core: numpy, scipy
+pip install -e .                 # core: numpy, scipy, matplotlib
 pip install -e ".[pyscf]"        # + PySCF, to compute the ab initio coupling
-pip install -e ".[plot]"         # + matplotlib, for the plotting helpers
+uv sync --group dev              # + pytest, to run the test suite
 ```
 
 Python ≥ 3.10. PySCF is needed only to *precompute* the coupling; everything
 afterwards (loading it, cross sections, rates) runs on numpy/scipy alone.
 
+## Tests
+
+```bash
+pytest                    # fast layer: numpy/scipy only
+pytest -m slow            # + CPSCF and full validation sweeps
+```
+
+Tests needing PySCF, or a precomputed coupling grid under `data/`, skip
+themselves when the prerequisite is absent, so a bare `pytest` run is green on
+a clean checkout. `scripts/test_plausibility.py` remains as the narrative,
+human-readable version of the same checks.
+
 ---
 
 ## Quick start
 
-Perform the calculation on the OH- system, orignally studied in the source papers.
+Perform the calculation on the OH⁻ system, originally studied in the source papers.
 The electronic coupling is computed ab initio (CPSCF) once and cached to disk;
 all observables are then evaluated from the cached file.
 
@@ -64,7 +83,6 @@ coupling.save("oh_coupling.npz")
 
 # 2. Use it (no PySCF required from here on) -------------------------------
 from aed_rate import AEDSystem
-from aed_rate.electronic.coupling import InterpolatedCoupling
 from aed_rate.utils.constants import CONSTANTS
 
 sys = AEDSystem.oh_system(
@@ -98,7 +116,7 @@ from aed_rate.electronic.coupling import InterpolatedCoupling
 from aed_rate.rate.state_to_state import AEDRateCalculator
 from aed_rate.utils.constants import CONSTANTS, get_reduced_mass
 
-# hypothetic system with EA = 1eV
+# hypothetical system with EA = 1 eV
 EA = CONSTANTS.ev_to_hartree(1.0)                     # electron affinity of AB
 
 # The potentials will be scaled using EA
@@ -199,6 +217,16 @@ Each `plotting.*` function returns `(fig, axes)` for further customization.
 **Nuclear motion**
 - Morse potential curves; Pekeris approximation for the centrifugal term (J > 0).
 - The second-derivative (∇²) non-BO term is neglected (≈ 0.1–0.3 %).
+- The `'dvr'` solver's kinetic operator is the 3-point finite-difference
+  Laplacian, so it converges as O(ΔR²), not spectrally. Use `'morse'` for
+  coupling integrals.
+
+**Known discrepancy**
+- The final vibrational distribution does **not** yet reproduce Acharya Table I,
+  and its peak depends on the coupling basis set (6-31G → v'=7, 6-311+G** → v'=8,
+  aug-cc-pVDZ → v'=6). This is grid-converged, so it is a property of the
+  coupling, not a numerical artefact. Pinned as an `xfail` in
+  `tests/test_rates.py::TestAcharyaBenchmark`.
 
 ---
 
@@ -206,7 +234,7 @@ Each `plotting.*` function returns `(fig, axes)` for further customization.
 
 | Module | Contents |
 |---|---|
-| `electronic/potential.py` | `MorsePotential`, `create_oh_system()`, `create_lih_system()` |
+| `electronic/potential.py` | `MorsePotential`, `create_oh_system()`, `create_oh_system_acharya()`, `create_lih_system()` |
 | `electronic/coupling.py` | `InterpolatedCoupling` (precompute / `from_npz`), `ElectronicCoupling` (CPSCF), `ModelCoupling` (Gaussian model) |
 | `electronic/continuum.py` | `ContinuumOrbital`, OPW, electron density of states |
 | `nuclear/` | DVR / Numerov / Morse solvers; `create_wavefunction_solver()` |
@@ -214,5 +242,6 @@ Each `plotting.*` function returns `(fig, axes)` for further customization.
 | `rate/thermal.py` | `ThermalRateCalculator`: k(T) |
 | `aed_calculator.py` | `AEDSystem` high-level facade + `diagnostic()` |
 | `utils/plotting.py` | per-step plotting helpers |
+| `utils/paths.py` | `data_dir()`, `data_file()` — where cached `.npz` grids live |
 
 
