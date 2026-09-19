@@ -106,8 +106,10 @@ physical.
 ## Studying a new system A⁻ + B
 
 Provide two Morse curves and the reduced mass, then precompute the coupling for
-your atoms — the precompute is system-agnostic (atoms and basis come from
-`ElectronicStructure`).
+your atoms. Nothing in the precompute is specialised to OH⁻ — the atoms, basis,
+charge and spin all come from the arguments you pass, so no code has to change
+for a new diatomic. The resulting grid is of course specific to that molecule
+and basis, and has to be recomputed for each new system.
 
 ```python
 from aed_rate.electronic.potential import MorsePotential
