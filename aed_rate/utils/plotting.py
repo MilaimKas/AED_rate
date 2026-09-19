@@ -10,12 +10,7 @@ All functions return (fig, ax) or (fig, axes) for further customization.
 import numpy as np
 from typing import Optional, List, Tuple, Union, Literal
 
-try:
-    import matplotlib.pyplot as plt
-    import matplotlib.colors as mcolors
-    MATPLOTLIB_AVAILABLE = True
-except ImportError:
-    MATPLOTLIB_AVAILABLE = False
+import matplotlib.pyplot as plt
 
 from ..utils.constants import CONSTANTS
 
@@ -25,16 +20,6 @@ from ..utils.constants import CONSTANTS
 # ======================================================================
 
 EnergyUnit = Literal["eV", "cm-1", "hartree"]
-
-
-def _require_matplotlib() -> None:
-    """Raise an informative error if matplotlib is not installed."""
-    if not MATPLOTLIB_AVAILABLE:
-        raise ImportError(
-            "matplotlib is required for plotting. "
-            "Install with: pip install matplotlib  "
-            "or: pip install aed_rate[plot]"
-        )
 
 
 def _energy_converter(unit: EnergyUnit):
@@ -101,7 +86,6 @@ def plot_potential_curves(
     -------
     fig, ax : matplotlib Figure and Axes
     """
-    _require_matplotlib()
     scale, ylabel = _energy_converter(unit)
 
     R = np.linspace(R_range[0], R_range[1], n_points)
@@ -214,7 +198,6 @@ def plot_bound_states(
     -------
     fig, ax : matplotlib Figure and Axes
     """
-    _require_matplotlib()
     scale, ylabel = _energy_converter(unit)
 
     n_plot = min(n_states, len(states))
@@ -348,7 +331,6 @@ def plot_scattering_state(
     -------
     fig, axes : matplotlib Figure and array of Axes (2 panels)
     """
-    _require_matplotlib()
     scale, ylabel = _energy_converter(unit)
 
     if E_ref is None:
@@ -460,7 +442,6 @@ def plot_energy_levels(
     -------
     fig, ax : matplotlib Figure and Axes
     """
-    _require_matplotlib()
     scale, ylabel = _energy_converter(unit)
 
     # Get vibrational energies (relative to each minimum)
@@ -563,7 +544,6 @@ def plot_coupling_curve(
     -------
     fig, axes : matplotlib Figure and array of Axes
     """
-    _require_matplotlib()
     scale, ylabel = _energy_converter(unit)
 
     R_vals = np.array([r.R for r in results])
@@ -689,8 +669,6 @@ def plot_coupling_strength(
     -------
     fig, ax : matplotlib Figure and Axes
     """
-    _require_matplotlib()
-
     # Default to the lowest grid k_e: the low-k OPW limit is the least
     # continuum-contaminated proxy for the bare orbital R-derivative.
     if electron_energy is None:
@@ -776,8 +754,6 @@ def plot_orbital_sensitivity(
     ValueError
         If the coupling carries no orbital-sensitivity data (old .npz).
     """
-    _require_matplotlib()
-
     R, dR_norm, dth_norm = coupling.orbital_derivative_norm()
     if dR_norm is None:
         raise ValueError(
@@ -843,8 +819,6 @@ def plot_scattering_derivative(
     -------
     fig, axes : matplotlib Figure and the two Axes (F, dF/dR).
     """
-    _require_matplotlib()
-
     r = scattering_state.r_grid
     F = scattering_state.wavefunction
     if derivative is None:
@@ -923,8 +897,6 @@ def plot_electronic_intermediates(
     -------
     fig, axes : matplotlib Figure and the 2×2 Axes array.
     """
-    _require_matplotlib()
-
     c = intermediates.coords
     z, x, y = c[:, 2], c[:, 0], c[:, 1]            # bond axis = z, π direction = x
     in_slab = np.abs(y) < slab
@@ -1015,7 +987,6 @@ def plot_coupling_integrand(
     -------
     fig, axes : matplotlib Figure and the two Axes (integrand, running integral).
     """
-    _require_matplotlib()
     from scipy.integrate import cumulative_trapezoid
 
     g = (np.asarray(bound_wavefunction)
