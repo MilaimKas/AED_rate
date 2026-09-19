@@ -32,9 +32,10 @@ from aed_rate.electronic.coupling import CouplingResult
 from aed_rate.electronic.potential import create_oh_system_acharya
 from aed_rate.rate.state_to_state import AEDRateCalculator
 from aed_rate.utils.constants import CONSTANTS, get_reduced_mass
+from aed_rate.utils.paths import data_file
 
 
-NPZ_PATH = "oh_minus_coupling_6311pgss.npz"
+NPZ_PATH = str(data_file("oh_minus_coupling_6311pgss.npz"))
 N_GRID = 4000                      # converged to ~1 %; 6000 for production
 R_MIN, R_MAX = 0.5, 15.0
 A0_ANG = 0.529177                  # Bohr → Å

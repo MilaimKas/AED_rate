@@ -22,7 +22,8 @@ Usage
     python scripts/precompute_coupling.py [--basis BASIS] [--out OUT]
 
     BASIS  : PySCF basis string, default '6-31g'
-    OUT    : output .npz filename, default 'oh_minus_coupling_6-31g.npz'
+    OUT    : output .npz filename, default 'oh_minus_coupling_<basis>.npz'
+             (a bare name is written into the data/ directory)
 """
 
 import sys
@@ -34,6 +35,7 @@ sys.path.insert(0, ".")
 from aed_rate.electronic.potential import create_oh_system_acharya
 from aed_rate.electronic.wavefunctions import ElectronicStructure
 from aed_rate.electronic.coupling import InterpolatedCoupling
+from aed_rate.utils.paths import data_file
 
 
 # ---------------------------------------------------------------------------
@@ -87,10 +89,12 @@ def main() -> None:
                         help="Grid points in outer region R∈(4.4, R_max] (default: 28)")
     args = parser.parse_args()
 
-    # Output filename: derive from basis if not given
+    # Output filename: derive from basis if not given, and place bare names
+    # in the data/ cache directory.
     if args.out is None:
         safe_basis = args.basis.replace("-", "").replace("*", "s").replace("+", "p")
         args.out = f"oh_minus_coupling_{safe_basis}.npz"
+    args.out = str(data_file(args.out, create_dir=True))
 
     anion_pot, _neutral_pot, _EA = create_oh_system_acharya()
     print(f"OH⁻ Morse: R_e={anion_pot.r_e:.3f} Bohr, β={anion_pot.beta:.3f} Bohr⁻¹")

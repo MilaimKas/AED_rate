@@ -19,6 +19,8 @@ from scipy.optimize import curve_fit
 
 from pyscf import gto, scf, cc
 
+from aed_rate.utils.paths import data_file
+
 HARTREE_EV = 27.211386245988
 BASIS = "aug-cc-pvtz"
 
@@ -90,9 +92,9 @@ def main() -> None:
     print(f"  neutral = MorsePotential(D_e={fn['D_e']:.4f}, r_e={fn['R_e']:.4f}, "
           f"beta={fn['beta']:.4f}, V_0={EA:.5f})")
 
-    np.savez("lih_pec_data.npz", R=R_grid, E_neutral=E_neu, E_anion=E_ani,
+    np.savez(data_file("lih_pec_data.npz", create_dir=True), R=R_grid, E_neutral=E_neu, E_anion=E_ani,
              EA=np.array([EA]))
-    print("\nSaved raw PEC data to lih_pec_data.npz")
+    print(f"\nSaved raw PEC data to {data_file('lih_pec_data.npz')}")
 
 
 if __name__ == "__main__":

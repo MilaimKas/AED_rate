@@ -20,6 +20,8 @@ Reference values:
 import numpy as np
 import sys
 
+from aed_rate.utils.paths import data_file
+
 # ======================================================================
 # Helpers
 # ======================================================================
@@ -486,9 +488,9 @@ def test_coupling_ab_initio() -> bool:
 # Maps a short label to the NPZ file produced by precompute_coupling.py.
 # The 6-31G entry now points to the extended grid (R up to 10 Bohr).
 _COUPLING_FILES = {
-    "6-31G (R≤10)":    "oh_minus_coupling_6-31g.npz",
-    "aug-cc-pVDZ":     "oh_minus_coupling_aug-cc-pvdz.npz",
-    "aug-cc-pVDZ+OPW": "oh_minus_coupling_aug-cc-pvdz_opw.npz",
+    "6-31G (R≤10)":    str(data_file("oh_minus_coupling_6-31g.npz")),
+    "aug-cc-pVDZ":     str(data_file("oh_minus_coupling_aug-cc-pvdz.npz")),
+    "aug-cc-pVDZ+OPW": str(data_file("oh_minus_coupling_aug-cc-pvdz_opw.npz")),
 }
 
 
@@ -728,9 +730,9 @@ def _plot_coupling_integrand(
 
     # Pick best available NPZ
     npz_priority = [
-        "oh_minus_coupling_aug-cc-pvdz_opw.npz",
-        "oh_minus_coupling_aug-cc-pvdz.npz",
-        "oh_minus_coupling_6-31g.npz",
+        str(data_file("oh_minus_coupling_aug-cc-pvdz_opw.npz")),
+        str(data_file("oh_minus_coupling_aug-cc-pvdz.npz")),
+        str(data_file("oh_minus_coupling_6-31g.npz")),
     ]
     npz_path = None
     for p in npz_priority:
@@ -1089,7 +1091,7 @@ def test_state_to_state_rates() -> bool:
     section("9. State-to-State Rates vs Acharya Table I")
 
     import os
-    NPZ_PATH = "oh_minus_coupling_6-31g.npz"
+    NPZ_PATH = str(data_file("oh_minus_coupling_6-31g.npz"))
 
     if not os.path.exists(NPZ_PATH):
         print(f"  [SKIP] {NPZ_PATH} not found. "
@@ -1349,7 +1351,7 @@ def test_cpscf_vs_fd() -> bool:
     print(f"  AO-motion term    = {ao_motion:+.6e}   "
           f"({abs(ao_motion / max(abs(m_FD_full), 1e-20)):.1%} of full FD)")
 
-    NPZ_PATH = "oh_minus_coupling_6-31g.npz"
+    NPZ_PATH = str(data_file("oh_minus_coupling_6-31g.npz"))
     if os.path.exists(NPZ_PATH):
         dn   = np.load(NPZ_PATH)
         spl  = RectBivariateSpline(

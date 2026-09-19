@@ -24,6 +24,7 @@ from aed_rate.electronic.coupling import ModelCoupling, InterpolatedCoupling
 from aed_rate.electronic.wavefunctions import ElectronicStructure
 from aed_rate.rate.state_to_state import AEDRateCalculator, angular_coupling_coefficient
 from aed_rate.utils.constants import CONSTANTS, get_reduced_mass
+from aed_rate.utils.paths import data_file
 
 
 # ======================================================================
@@ -58,8 +59,8 @@ def setup_system(
     if ab_initio:
         es = ElectronicStructure("O", "H", basis="6-31g")
         coupling = InterpolatedCoupling(es, anion_pot)
-        coupling.load(cpscf_npz)
-        print(f"Using ab initio CPSCF coupling from '{cpscf_npz}'")
+        coupling.load(str(data_file(cpscf_npz)))
+        print(f"Using ab initio CPSCF coupling from '{data_file(cpscf_npz)}'")
         print(f"  R range: [{coupling.R_min:.3f}, {coupling.R_cutoff:.3f}] Bohr")
         print(f"  k_e range: [{coupling.k_e_grid[0]:.3f}, {coupling.k_e_grid[-1]:.3f}] a.u.")
     else:

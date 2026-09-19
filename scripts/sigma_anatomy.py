@@ -34,6 +34,7 @@ from aed_rate.electronic.coupling import InterpolatedCoupling
 from aed_rate.aed_calculator import AEDSystem
 from aed_rate.nuclear.nuclear_wavefunction import create_wavefunction_solver
 from aed_rate.utils.constants import CONSTANTS, get_reduced_mass
+from aed_rate.utils.paths import data_file
 
 
 def _slope(x: np.ndarray, y: np.ndarray, lo: int = 0, hi: int = 6) -> float:
@@ -51,7 +52,9 @@ def main() -> None:
     R_e = anion.r_e
     eV = CONSTANTS.hartree_to_ev
 
-    coupling = InterpolatedCoupling.from_npz("lih_minus_coupling_swave.npz")
+    coupling = InterpolatedCoupling.from_npz(
+        str(data_file("lih_minus_coupling_swave.npz"))
+    )
     system = AEDSystem(anion, neutral, EA, mu, coupling=coupling,
                        solver_method="morse", n_grid=6000)
     rc = system._rate_calc

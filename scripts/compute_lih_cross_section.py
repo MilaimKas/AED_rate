@@ -31,6 +31,7 @@ from aed_rate.electronic.wavefunctions import ElectronicStructure
 from aed_rate.electronic.coupling import InterpolatedCoupling
 from aed_rate.aed_calculator import AEDSystem
 from aed_rate.utils.constants import get_reduced_mass, CONSTANTS
+from aed_rate.utils.paths import data_file
 
 
 def precompute_lih_coupling(basis: str, out: str) -> None:
@@ -76,6 +77,7 @@ def main() -> None:
     parser.add_argument("--force", action="store_true",
                         help="Recompute the coupling even if the cache exists")
     args = parser.parse_args()
+    args.npz = str(data_file(args.npz, create_dir=True))
 
     import os
     if args.force or not os.path.exists(args.npz):
