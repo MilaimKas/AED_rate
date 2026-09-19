@@ -6,7 +6,25 @@ build-backend = "setuptools.build_meta"
 name = "aed_rate"
 version = "0.1.0"
 description = "Associative Electron Detachment rate calculations"
+readme = "README.md"
 requires-python = ">=3.10"
+authors = [{ name = "Milaim Kas", email = "milaim.kas@gmail.com" }]
+keywords = [
+    "associative electron detachment",
+    "molecular anions",
+    "non-Born-Oppenheimer",
+    "cross section",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 dependencies = [
     "numpy>=1.24",
     "scipy>=1.10",
@@ -18,3 +36,17 @@ pyscf = ["pyscf>=2.3"]
 
 [tool.setuptools.packages.find]
 include = ["aed_rate*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Fast layer by default; "pytest -m slow" overrides this to run the rest.
+addopts = "-m 'not slow'"
+# Slow tests (dense grids, full validation sweeps) are opt-in: -m slow
+markers = [
+    "slow: test takes more than a few seconds",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
